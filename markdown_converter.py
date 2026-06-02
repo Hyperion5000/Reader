@@ -585,7 +585,9 @@ def should_join_lines(left: str, right: str) -> bool:
 
 
 def get_tesseract_info() -> dict:
-    path = shutil.which("tesseract")
+    bundled_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    bundled_tesseract = bundled_dir / "tesseract.exe"
+    path = str(bundled_tesseract) if bundled_tesseract.exists() else shutil.which("tesseract")
     if not path:
         common_paths = [
             Path("C:/Program Files/Tesseract-OCR/tesseract.exe"),
@@ -595,7 +597,8 @@ def get_tesseract_info() -> dict:
             if candidate.exists():
                 path = str(candidate)
                 break
-    local_tessdata = Path(__file__).resolve().parent / "tessdata"
+    bundled_tessdata = bundled_dir / "tessdata"
+    local_tessdata = bundled_tessdata if bundled_tessdata.exists() else Path(__file__).resolve().parent / "tessdata"
     tessdata_dir = str(local_tessdata) if local_tessdata.exists() else None
     languages: list[str] = []
     tesseract_version = ""
