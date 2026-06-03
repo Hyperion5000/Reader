@@ -18,6 +18,7 @@ from typing import Callable
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 LOW_TEXT_THRESHOLD = 400
+PDF_TEXT_LAYER_THRESHOLD = 40
 SKIP_DIR_NAMES = {".venv", "__pycache__", "tessdata"}
 
 
@@ -60,12 +61,9 @@ def main() -> int:
     print_environment_check()
 
     result_dir = make_result_dir(source_dir)
-    raw_dir = result_dir / "01_raw_markdown"
-    clean_dir = result_dir / "02_clean_markdown"
-    reports_dir = result_dir / "03_reports"
-    problem_dir = result_dir / "04_problem_files"
-    for folder in (raw_dir, clean_dir, reports_dir, problem_dir):
-        folder.mkdir(parents=True, exist_ok=True)
+    clean_dir = result_dir / "01_markdown"
+    problem_dir = result_dir / "02_problem_files"
+    clean_dir.mkdir(parents=True, exist_ok=True)
 
     files = find_documents(source_dir, result_dir)
     if not files:
@@ -85,7 +83,6 @@ def main() -> int:
         result = process_document(
             file_path=file_path,
             output_name=output_name,
-            raw_dir=raw_dir,
             clean_dir=clean_dir,
             problem_dir=problem_dir,
             tesseract_info=tesseract_info,
@@ -94,10 +91,8 @@ def main() -> int:
         print(f"Результат: {result.status}. Символов: {result.char_count}. {result.warning}".strip())
 
     write_combined_markdown_file(result_dir, clean_dir, results)
-    write_reports(reports_dir, result_dir, source_dir, results, tesseract_info)
     print("\nГотово.")
     print(f"Папка результата: {result_dir}")
-    print(f"Главный отчёт: {reports_dir / 'conversion_report.md'}")
     print(f"Общий файл: {result_dir / '00_ALL_DOCUMENTS.md'}")
     if args.open_result:
         open_result_folder(result_dir)
@@ -213,7 +208,6 @@ def unique_output_name(file_path: Path, source_dir: Path, used_names: set[str]) 
 def process_document(
     file_path: Path,
     output_name: str,
-    raw_dir: Path,
     clean_dir: Path,
     problem_dir: Path,
     tesseract_info: dict,
@@ -266,13 +260,9 @@ def process_document(
         warning = join_warning(warning, "В Tesseract не найден русский язык rus.")
 
     header = build_header(file_path, processed_at, doc_type, method or "не выполнено", warning)
-    raw_path = raw_dir / output_name
     clean_path = clean_dir / output_name
 
-    raw_text = header + ("\n\n" + raw_markdown if raw_markdown else f"\n\nОшибка: {error}\n")
-    raw_path.write_text(raw_text, encoding="utf-8")
-
-    clean_text = raw_text
+    clean_text = header + ("\n\n" + raw_markdown if raw_markdown else f"\n\nОшибка: {error}\n")
     if raw_markdown:
         cleaned_body = conservative_cleanup(raw_markdown)
         if cleaned_body.strip():
@@ -280,6 +270,7 @@ def process_document(
     clean_path.write_text(clean_text, encoding="utf-8")
 
     if status != "успешно":
+        problem_dir.mkdir(parents=True, exist_ok=True)
         problem_note = build_problem_note(file_path, doc_type, method, status, warning, error)
         (problem_dir / output_name).write_text(problem_note, encoding="utf-8")
 
@@ -305,7 +296,7 @@ def detect_doc_type(file_path: Path) -> str:
     if file_path.suffix.lower() != ".pdf":
         return file_path.suffix.lower().lstrip(".").upper()
     text_count = sample_pdf_text_count(file_path)
-    if text_count < LOW_TEXT_THRESHOLD:
+    if text_count < PDF_TEXT_LAYER_THRESHOLD:
         return "PDF-скан"
     return "PDF с текстом"
 
@@ -674,113 +665,11 @@ def build_problem_note(source: Path, doc_type: str, method: str, status: str, wa
     )
 
 
-def write_reports(
-    reports_dir: Path,
-    result_dir: Path,
-    source_dir: Path,
-    results: list[ConversionResult],
-    tesseract_info: dict,
-) -> None:
-    total = len(results)
-    ok = sum(1 for item in results if item.status == "успешно")
-    review = sum(1 for item in results if item.status == "требует проверки")
-    errors = sum(1 for item in results if item.status == "ошибка")
-
-    lines = [
-        "# Отчёт по конвертации",
-        "",
-        f"- Исходная папка: `{source_dir}`",
-        f"- Папка результата: `{result_dir}`",
-        f"- Дата: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"- Всего файлов: {total}",
-        f"- Успешно: {ok}",
-        f"- Требует проверки: {review}",
-        f"- Ошибки: {errors}",
-        f"- Tesseract OCR: {'найден' if tesseract_info['path'] else 'не найден'}",
-        f"- Версия Tesseract OCR: {tesseract_info.get('version') or 'не определена'}",
-        f"- Языки OCR: {', '.join(tesseract_info['languages']) if tesseract_info['languages'] else 'не определены'}",
-        f"- Общий файл: `{result_dir / '00_ALL_DOCUMENTS.md'}`",
-        "",
-        "| Файл | Тип | Метод | Статус | Страниц | Символов | Качество | Кириллица | Нечит. символы | Предупреждение |",
-        "|---|---|---|---|---:|---:|---|---:|---:|---|",
-    ]
-    for item in results:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    escape_table(item.source.name),
-                    escape_table(item.doc_type),
-                    escape_table(item.method),
-                    escape_table(item.status),
-                    str(item.page_count) if item.page_count is not None else "-",
-                    str(item.char_count),
-                    escape_table(item.quality_status),
-                    f"{item.cyrillic_ratio:.3f}",
-                    str(item.replacement_count),
-                    escape_table(item.warning or item.error or ""),
-                ]
-            )
-            + " |"
-        )
-    lines.append("")
-    (reports_dir / "conversion_report.md").write_text("\n".join(lines), encoding="utf-8")
-
-    problems = [item for item in results if item.status != "успешно"]
-    problem_lines = ["# Проблемные файлы", ""]
-    if not problems:
-        problem_lines.append("Проблемных файлов не найдено.")
-    else:
-        for item in problems:
-            problem_lines.extend(
-                [
-                    f"## {item.source.name}",
-                    "",
-                    f"- Статус: {item.status}",
-                    f"- Тип: {item.doc_type}",
-                    f"- Метод: {item.method}",
-                    f"- Предупреждение: {item.warning or 'нет'}",
-                    f"- Ошибка: {item.error or 'нет'}",
-                    "",
-                ]
-            )
-    (reports_dir / "problem_files.md").write_text("\n".join(problem_lines), encoding="utf-8")
-
-    quality_lines = [
-        "# Отчёт качества",
-        "",
-        "Этот отчёт помогает быстро увидеть слабые места конвертации. Если статус не `норма`, файл нужно проверить по оригиналу.",
-        "",
-        "| Файл | Качество | Тип | Метод | Страниц | Символов | Доля кириллицы | Нечит. символы | Комментарий |",
-        "|---|---|---|---|---:|---:|---:|---:|---|",
-    ]
-    for item in results:
-        quality_lines.append(
-            "| "
-            + " | ".join(
-                [
-                    escape_table(item.source.name),
-                    escape_table(item.quality_status),
-                    escape_table(item.doc_type),
-                    escape_table(item.method),
-                    str(item.page_count) if item.page_count is not None else "-",
-                    str(item.char_count),
-                    f"{item.cyrillic_ratio:.3f}",
-                    str(item.replacement_count),
-                    escape_table(item.warning or item.error or ""),
-                ]
-            )
-            + " |"
-        )
-    quality_lines.append("")
-    (reports_dir / "quality_report.md").write_text("\n".join(quality_lines), encoding="utf-8")
-
-
 def write_combined_markdown_file(result_dir: Path, clean_dir: Path, results: list[ConversionResult]) -> None:
     lines = [
         "# Все документы",
         "",
-        "Источник: очищенные Markdown-файлы из папки `02_clean_markdown`.",
+        "Источник: очищенные Markdown-файлы из папки `01_markdown`.",
         "Для юридически важных мест сверяйте OCR-сканы с оригинальными PDF.",
         "",
     ]
@@ -803,10 +692,6 @@ def write_combined_markdown_file(result_dir: Path, clean_dir: Path, results: lis
             ]
         )
     (result_dir / "00_ALL_DOCUMENTS.md").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
-
-
-def escape_table(value: str) -> str:
-    return str(value).replace("|", "\\|").replace("\n", " ")
 
 
 def normalize_newlines(text: str) -> str:
