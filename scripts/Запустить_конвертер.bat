@@ -2,17 +2,22 @@
 chcp 65001 > nul
 setlocal
 
-set "ROOT=%~dp0"
+for %%I in ("%~dp0..") do set "ROOT=%%~fI"
 cd /d "%ROOT%"
+
+set "APP=src\reader\markdown_converter.py"
+set "REQ=config\requirements.txt"
+set "VENV=runtime\.venv"
 
 echo.
 echo Локальный конвертер PDF/DOCX в Markdown
 echo Документы не отправляются в интернет.
 echo.
 
-if not exist ".venv\Scripts\python.exe" (
+if not exist "%VENV%\Scripts\python.exe" (
     echo Первая настройка. Создаю локальное окружение...
-    python -m venv .venv
+    if not exist "runtime" mkdir "runtime"
+    python -m venv "%VENV%"
     if errorlevel 1 (
         echo Не удалось создать окружение Python.
         pause
@@ -20,24 +25,24 @@ if not exist ".venv\Scripts\python.exe" (
     )
 )
 
-if not exist ".venv\.ready" (
+if not exist "%VENV%\.ready" (
     echo Устанавливаю нужные компоненты. Это может занять несколько минут...
-    ".venv\Scripts\python.exe" -m pip install --upgrade pip
+    "%VENV%\Scripts\python.exe" -m pip install --upgrade pip
     if errorlevel 1 (
         echo Не удалось обновить pip.
         pause
         exit /b 1
     )
-    ".venv\Scripts\python.exe" -m pip install -r requirements.txt
+    "%VENV%\Scripts\python.exe" -m pip install -r "%REQ%"
     if errorlevel 1 (
-        echo Не удалось установить компоненты из requirements.txt.
+        echo Не удалось установить компоненты из %REQ%.
         pause
         exit /b 1
     )
-    echo ready > ".venv\.ready"
+    echo ready > "%VENV%\.ready"
 )
 
-".venv\Scripts\python.exe" markdown_converter.py --open-result %*
+"%VENV%\Scripts\python.exe" "%APP%" --open-result %*
 
 echo.
 echo Работа завершена. Если выше указан путь к папке результата, откройте её.

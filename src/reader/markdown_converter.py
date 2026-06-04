@@ -789,9 +789,8 @@ def get_tesseract_info() -> dict:
             if candidate.exists():
                 path = str(candidate)
                 break
-    bundled_tessdata = bundled_dir / "tessdata"
-    local_tessdata = bundled_tessdata if bundled_tessdata.exists() else Path(__file__).resolve().parent / "tessdata"
-    tessdata_dir = str(local_tessdata) if local_tessdata.exists() else None
+    tessdata_path = find_tessdata_dir(bundled_dir)
+    tessdata_dir = str(tessdata_path) if tessdata_path else None
     languages: list[str] = []
     tesseract_version = ""
     if path:
@@ -831,6 +830,23 @@ def get_tesseract_info() -> dict:
         except Exception:
             languages = []
     return {"path": path, "languages": languages, "tessdata_dir": tessdata_dir, "version": tesseract_version}
+
+
+def find_tessdata_dir(bundled_dir: Path) -> Path | None:
+    source_dir = Path(__file__).resolve().parent
+    candidates = [
+        bundled_dir / "tessdata",
+        source_dir / "tessdata",
+        source_dir.parent / "tessdata",
+        source_dir.parent.parent / "tessdata",
+        source_dir.parent.parent / "runtime" / "tessdata",
+        Path.cwd() / "tessdata",
+        Path.cwd() / "runtime" / "tessdata",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def build_problem_note(source: Path, doc_type: str, method: str, status: str, warning: str, error: str) -> str:
