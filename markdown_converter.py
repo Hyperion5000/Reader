@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime as dt
 import importlib.util
 import os
@@ -19,6 +20,7 @@ from typing import Callable
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 LOW_TEXT_THRESHOLD = 400
 PDF_TEXT_LAYER_THRESHOLD = 40
+MAX_OCR_WORKERS = 4
 SKIP_DIR_NAMES = {".venv", "__pycache__", "tessdata"}
 
 
@@ -236,10 +238,10 @@ def process_document(
         if len(raw_markdown) < LOW_TEXT_THRESHOLD:
             status = "требует проверки"
             warning = "Мало извлечённого текста, нужно проверить вручную."
-        if doc_type == "PDF-скан" and method not in {"Tesseract OCR", "Docling OCR"}:
+        if doc_type in {"PDF-скан", "PDF смешанный"} and "OCR" not in method:
             status = "требует проверки"
             warning = join_warning(warning, "Скан обработан запасным методом, OCR нужно проверить.")
-        if doc_type == "PDF-скан" and looks_like_bad_russian_ocr(raw_markdown):
+        if doc_type in {"PDF-скан", "PDF смешанный"} and looks_like_bad_russian_ocr(raw_markdown):
             status = "требует проверки"
             warning = join_warning(warning, "Похоже на слабое распознавание русского текста.")
         if quality["warning"]:
@@ -252,10 +254,10 @@ def process_document(
         warning = "Файл не удалось конвертировать."
 
     char_count = len(raw_markdown)
-    if doc_type == "PDF-скан" and not tesseract_info["path"]:
+    if doc_type in {"PDF-скан", "PDF смешанный"} and not tesseract_info["path"]:
         status = "требует проверки" if status == "успешно" else status
         warning = join_warning(warning, "Tesseract OCR не найден; качество сканов может быть низким.")
-    if doc_type == "PDF-скан" and tesseract_info["path"] and "rus" not in tesseract_info["languages"]:
+    if doc_type in {"PDF-скан", "PDF смешанный"} and tesseract_info["path"] and "rus" not in tesseract_info["languages"]:
         status = "требует проверки" if status == "успешно" else status
         warning = join_warning(warning, "В Tesseract не найден русский язык rus.")
 
@@ -295,9 +297,14 @@ def detect_doc_type(file_path: Path) -> str:
         return "DOCX"
     if file_path.suffix.lower() != ".pdf":
         return file_path.suffix.lower().lstrip(".").upper()
-    text_count = sample_pdf_text_count(file_path)
-    if text_count < PDF_TEXT_LAYER_THRESHOLD:
+    page_text_counts = get_pdf_page_text_counts(file_path)
+    if not page_text_counts:
         return "PDF-скан"
+    text_pages = sum(1 for count in page_text_counts if count >= PDF_TEXT_LAYER_THRESHOLD)
+    if text_pages == 0:
+        return "PDF-скан"
+    if text_pages < len(page_text_counts):
+        return "PDF смешанный"
     return "PDF с текстом"
 
 
@@ -324,7 +331,7 @@ def assess_text_quality(text: str, doc_type: str) -> dict:
         warnings.append(f"Есть нечитаемые символы: {replacement_count}.")
     if len(text) < LOW_TEXT_THRESHOLD:
         warnings.append("Очень мало текста.")
-    if doc_type == "PDF-скан" and cyrillic_ratio < 0.35 and len(letters) >= 200:
+    if doc_type in {"PDF-скан", "PDF смешанный"} and cyrillic_ratio < 0.35 and len(letters) >= 200:
         warnings.append("Низкая доля кириллицы для русского скана.")
 
     status = "норма" if not warnings else "проверить"
@@ -336,17 +343,17 @@ def assess_text_quality(text: str, doc_type: str) -> dict:
     }
 
 
-def sample_pdf_text_count(file_path: Path) -> int:
+def get_pdf_page_text_counts(file_path: Path) -> list[int]:
     try:
         import fitz
 
-        count = 0
+        counts: list[int] = []
         with fitz.open(file_path) as doc:
-            for page in doc[: min(5, doc.page_count)]:
-                count += len(page.get_text("text").strip())
-        return count
+            for page in doc:
+                counts.append(len(page.get_text("text").strip()))
+        return counts
     except Exception:
-        return 0
+        return []
 
 
 def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[str, str]:
@@ -359,10 +366,10 @@ def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[
             ("Docling", lambda: convert_with_docling(file_path, use_ocr=False, tesseract_info=tesseract_info)),
         ]
     elif file_path.suffix.lower() == ".pdf":
-        use_ocr = doc_type == "PDF-скан"
-        if use_ocr:
+        use_page_ocr = doc_type in {"PDF-скан", "PDF смешанный"}
+        if use_page_ocr:
             converters = [
-                ("Tesseract OCR", lambda: convert_scanned_pdf_with_tesseract(file_path, tesseract_info)),
+                ("Постранично: текст+OCR", lambda: convert_pdf_page_by_page(file_path, tesseract_info)),
                 ("Docling OCR", lambda: convert_with_docling(file_path, use_ocr=True, tesseract_info=tesseract_info)),
                 ("MarkItDown", lambda: convert_with_markitdown(file_path)),
                 ("PyMuPDF text", lambda: convert_with_pymupdf_text(file_path)),
@@ -416,7 +423,7 @@ def run_without_library_noise(action: Callable[[], str]) -> str:
             return action()
 
 
-def convert_scanned_pdf_with_tesseract(file_path: Path, tesseract_info: dict) -> str:
+def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
     if not tesseract_info.get("path"):
         raise RuntimeError("Tesseract OCR не найден.")
     languages = set(tesseract_info.get("languages") or [])
@@ -431,35 +438,89 @@ def convert_scanned_pdf_with_tesseract(file_path: Path, tesseract_info: dict) ->
 
     with tempfile.TemporaryDirectory(prefix="pdf_ocr_") as temp_dir:
         temp_path = Path(temp_dir)
+        ocr_jobs: list[tuple[int, int, Path]] = []
         with fitz.open(file_path) as document:
             if document.page_count == 0:
                 raise RuntimeError("PDF не содержит страниц.")
             for page_index, page in enumerate(document, start=1):
-                print(f"  OCR страница {page_index}/{document.page_count}")
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2.8, 2.8), alpha=False)
-                image_path = temp_path / f"page_{page_index:04d}.png"
-                pixmap.save(image_path)
-                command = [tesseract_path, str(image_path), "stdout"]
-                if tessdata_dir:
-                    command.extend(["--tessdata-dir", tessdata_dir])
-                command.extend(["-l", "rus+eng", "--psm", "6"])
-                completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=240,
-                )
-                if completed.returncode != 0:
-                    raise RuntimeError(completed.stderr.strip() or "Tesseract вернул ошибку.")
-                page_text = completed.stdout.strip()
-                pages_text.append(f"## Страница {page_index}\n\n{page_text}".strip())
+                page_text = normalize_newlines(page.get_text("text")).strip()
+                if len(page_text) >= PDF_TEXT_LAYER_THRESHOLD:
+                    pages_text.append(format_page_text(page_index, page_text))
+                    continue
 
+                image_path = temp_path / f"page_{page_index:04d}.png"
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), alpha=False)
+                pixmap.save(image_path)
+                preprocess_ocr_image(image_path)
+                ocr_jobs.append((page_index, document.page_count, image_path))
+
+        if ocr_jobs:
+            workers = choose_ocr_worker_count(len(ocr_jobs))
+            print(f"  OCR страниц: {len(ocr_jobs)}. Параллельно: {workers}")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(run_tesseract_on_image, image_path, tesseract_path, tessdata_dir): page_index
+                    for page_index, _, image_path in ocr_jobs
+                }
+                ocr_results: dict[int, str] = {}
+                for future in concurrent.futures.as_completed(future_map):
+                    page_index = future_map[future]
+                    print(f"  OCR страница {page_index}/{ocr_jobs[0][1]}")
+                    ocr_results[page_index] = future.result().strip()
+            for page_index, _, _ in ocr_jobs:
+                page_text = ocr_results.get(page_index, "")
+                pages_text.append(format_page_text(page_index, page_text))
+
+    pages_text.sort(key=page_number_from_markdown)
     result = "\n\n".join(page for page in pages_text if page.strip()).strip()
     if not result:
         raise RuntimeError("Tesseract OCR не извлёк текст.")
     return result
+
+
+def choose_ocr_worker_count(job_count: int) -> int:
+    cpu_count = os.cpu_count() or 2
+    return max(1, min(MAX_OCR_WORKERS, job_count, max(1, cpu_count // 2)))
+
+
+def preprocess_ocr_image(image_path: Path) -> None:
+    try:
+        from PIL import Image, ImageFilter, ImageOps
+
+        with Image.open(image_path) as image:
+            processed = ImageOps.grayscale(image)
+            processed = ImageOps.autocontrast(processed, cutoff=1)
+            processed = processed.filter(ImageFilter.SHARPEN)
+            processed.save(image_path)
+    except Exception:
+        pass
+
+
+def run_tesseract_on_image(image_path: Path, tesseract_path: str, tessdata_dir: str | None) -> str:
+    command = [tesseract_path, str(image_path), "stdout"]
+    if tessdata_dir:
+        command.extend(["--tessdata-dir", tessdata_dir])
+    command.extend(["-l", "rus+eng", "--psm", "6"])
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=240,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or "Tesseract вернул ошибку.")
+    return completed.stdout
+
+
+def format_page_text(page_index: int, page_text: str) -> str:
+    return f"## Страница {page_index}\n\n{page_text.strip()}".strip()
+
+
+def page_number_from_markdown(page_text: str) -> int:
+    match = re.match(r"## Страница (\d+)", page_text)
+    return int(match.group(1)) if match else 0
 
 
 def build_docling_converter(use_ocr: bool, tesseract_info: dict):
