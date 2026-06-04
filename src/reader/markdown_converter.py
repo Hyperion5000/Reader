@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ PDF_TEXT_LAYER_BAD_SINGLE_TOKEN_RATIO = 0.65
 PDF_TEXT_LAYER_BAD_CYRILLIC_RATIO = 0.25
 BLANK_PAGE_DARK_PIXEL_RATIO = 0.01
 MAX_OCR_WORKERS = 4
-SKIP_DIR_NAMES = {".venv", "__pycache__", "tessdata"}
+SKIP_DIR_NAMES = {".venv", "__pycache__", "build", "dist", "runtime", "tessdata"}
 
 
 @dataclass
@@ -611,29 +612,20 @@ def convert_with_pymupdf_text(file_path: Path) -> str:
 
 
 def convert_docx_direct(file_path: Path) -> str:
-    import xml.etree.ElementTree as ET
-
     with zipfile.ZipFile(file_path) as archive:
         try:
             xml_bytes = archive.read("word/document.xml")
         except KeyError as exc:
             raise RuntimeError("DOCX не содержит основного текста word/document.xml.") from exc
 
-    root = ET.fromstring(xml_bytes)
-    body = root.find(f".//{word_tag('body')}")
-    if body is None:
-        raise RuntimeError("В DOCX не найден основной текст.")
+        root = ET.fromstring(xml_bytes)
+        body = root.find(f".//{word_tag('body')}")
+        if body is None:
+            raise RuntimeError("В DOCX не найден основной текст.")
 
-    blocks: list[str] = []
-    for child in body:
-        if child.tag == word_tag("p"):
-            paragraph = extract_docx_paragraph_text(child)
-            if paragraph:
-                blocks.append(paragraph)
-        elif child.tag == word_tag("tbl"):
-            table = extract_docx_table(child)
-            if table:
-                blocks.append(table)
+        blocks = extract_docx_blocks(body)
+        blocks.extend(extract_docx_notes(archive, "word/footnotes.xml", "Сноски"))
+        blocks.extend(extract_docx_notes(archive, "word/endnotes.xml", "Концевые сноски"))
 
     result = "\n\n".join(blocks).strip()
     if not result:
@@ -645,6 +637,40 @@ def word_tag(name: str) -> str:
     return f"{{http://schemas.openxmlformats.org/wordprocessingml/2006/main}}{name}"
 
 
+def extract_docx_blocks(container) -> list[str]:
+    blocks: list[str] = []
+    for child in container:
+        if child.tag == word_tag("p"):
+            paragraph = extract_docx_paragraph_text(child)
+            if paragraph:
+                blocks.append(paragraph)
+        elif child.tag == word_tag("tbl"):
+            table = extract_docx_table(child)
+            if table:
+                blocks.append(table)
+    return blocks
+
+
+def extract_docx_notes(archive: zipfile.ZipFile, part_name: str, title: str) -> list[str]:
+    try:
+        root = ET.fromstring(archive.read(part_name))
+    except KeyError:
+        return []
+
+    notes: list[str] = []
+    for note in root:
+        note_id = note.attrib.get(word_tag("id"), "")
+        if not note_id or note_id.startswith("-"):
+            continue
+        note_text = "\n\n".join(extract_docx_blocks(note)).strip()
+        if note_text:
+            notes.append(f"[{note_id}] {note_text}")
+
+    if not notes:
+        return []
+    return [f"## {title}", *notes]
+
+
 def extract_docx_paragraph_text(paragraph) -> str:
     parts: list[str] = []
     for node in paragraph.iter():
@@ -654,6 +680,10 @@ def extract_docx_paragraph_text(paragraph) -> str:
             parts.append("\t")
         elif node.tag in {word_tag("br"), word_tag("cr")}:
             parts.append("\n")
+        elif node.tag in {word_tag("footnoteReference"), word_tag("endnoteReference")}:
+            note_id = node.attrib.get(word_tag("id"))
+            if note_id and not note_id.startswith("-"):
+                parts.append(f"[{note_id}]")
     return clean_docx_text("".join(parts))
 
 
