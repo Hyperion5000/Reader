@@ -20,6 +20,10 @@ from typing import Callable
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 LOW_TEXT_THRESHOLD = 400
 PDF_TEXT_LAYER_THRESHOLD = 40
+PDF_TEXT_LAYER_MIN_LETTERS_FOR_QUALITY_CHECK = 60
+PDF_TEXT_LAYER_BAD_SINGLE_TOKEN_RATIO = 0.65
+PDF_TEXT_LAYER_BAD_CYRILLIC_RATIO = 0.25
+BLANK_PAGE_DARK_PIXEL_RATIO = 0.01
 MAX_OCR_WORKERS = 4
 SKIP_DIR_NAMES = {".venv", "__pycache__", "tessdata"}
 
@@ -297,13 +301,13 @@ def detect_doc_type(file_path: Path) -> str:
         return "DOCX"
     if file_path.suffix.lower() != ".pdf":
         return file_path.suffix.lower().lstrip(".").upper()
-    page_text_counts = get_pdf_page_text_counts(file_path)
-    if not page_text_counts:
+    page_texts = get_pdf_page_texts(file_path)
+    if not page_texts:
         return "PDF-скан"
-    text_pages = sum(1 for count in page_text_counts if count >= PDF_TEXT_LAYER_THRESHOLD)
-    if text_pages == 0:
+    ocr_pages = sum(1 for page_text in page_texts if should_ocr_pdf_page_text(page_text))
+    if ocr_pages == len(page_texts):
         return "PDF-скан"
-    if text_pages < len(page_text_counts):
+    if ocr_pages:
         return "PDF смешанный"
     return "PDF с текстом"
 
@@ -344,14 +348,18 @@ def assess_text_quality(text: str, doc_type: str) -> dict:
 
 
 def get_pdf_page_text_counts(file_path: Path) -> list[int]:
+    return [len(page_text.strip()) for page_text in get_pdf_page_texts(file_path)]
+
+
+def get_pdf_page_texts(file_path: Path) -> list[str]:
     try:
         import fitz
 
-        counts: list[int] = []
+        texts: list[str] = []
         with fitz.open(file_path) as doc:
             for page in doc:
-                counts.append(len(page.get_text("text").strip()))
-        return counts
+                texts.append(normalize_newlines(page.get_text("text")).strip())
+        return texts
     except Exception:
         return []
 
@@ -444,13 +452,16 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
                 raise RuntimeError("PDF не содержит страниц.")
             for page_index, page in enumerate(document, start=1):
                 page_text = normalize_newlines(page.get_text("text")).strip()
-                if len(page_text) >= PDF_TEXT_LAYER_THRESHOLD:
+                if not should_ocr_pdf_page_text(page_text):
                     pages_text.append(format_page_text(page_index, page_text))
                     continue
 
                 image_path = temp_path / f"page_{page_index:04d}.png"
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), alpha=False)
                 pixmap.save(image_path)
+                if is_probably_blank_image(image_path):
+                    pages_text.append(format_page_text(page_index, ""))
+                    continue
                 preprocess_ocr_image(image_path)
                 ocr_jobs.append((page_index, document.page_count, image_path))
 
@@ -476,6 +487,46 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
     if not result:
         raise RuntimeError("Tesseract OCR не извлёк текст.")
     return result
+
+
+def should_ocr_pdf_page_text(page_text: str) -> bool:
+    text = normalize_newlines(page_text).strip()
+    if len(text) < PDF_TEXT_LAYER_THRESHOLD:
+        return True
+    return looks_like_bad_pdf_text_layer(text)
+
+
+def looks_like_bad_pdf_text_layer(text: str) -> bool:
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", text)
+    if len(letters) < PDF_TEXT_LAYER_MIN_LETTERS_FOR_QUALITY_CHECK:
+        return False
+
+    words = re.findall(r"[A-Za-zА-Яа-яЁё]{2,}", text)
+    single_tokens = re.findall(
+        r"(?<![A-Za-zА-Яа-яЁё])[A-Za-zА-Яа-яЁё](?![A-Za-zА-Яа-яЁё])",
+        text,
+    )
+    cyrillic = re.findall(r"[А-Яа-яЁё]", text)
+    single_token_ratio = len(single_tokens) / max(1, len(words) + len(single_tokens))
+    cyrillic_ratio = len(cyrillic) / len(letters)
+
+    return (
+        single_token_ratio >= PDF_TEXT_LAYER_BAD_SINGLE_TOKEN_RATIO
+        and cyrillic_ratio < PDF_TEXT_LAYER_BAD_CYRILLIC_RATIO
+    )
+
+
+def is_probably_blank_image(image_path: Path) -> bool:
+    try:
+        from PIL import Image
+
+        with Image.open(image_path).convert("L") as image:
+            histogram = image.histogram()
+            dark_pixels = sum(histogram[:245])
+            total_pixels = image.width * image.height
+        return total_pixels > 0 and (dark_pixels / total_pixels) < BLANK_PAGE_DARK_PIXEL_RATIO
+    except Exception:
+        return False
 
 
 def choose_ocr_worker_count(job_count: int) -> int:
