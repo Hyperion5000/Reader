@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -368,6 +369,7 @@ def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[
 
     if file_path.suffix.lower() == ".docx":
         converters = [
+            ("Встроенное чтение DOCX", lambda: convert_docx_direct(file_path)),
             ("MarkItDown", lambda: convert_with_markitdown(file_path)),
             ("Docling", lambda: convert_with_docling(file_path, use_ocr=False, tesseract_info=tesseract_info)),
         ]
@@ -606,6 +608,95 @@ def convert_with_pymupdf_text(file_path: Path) -> str:
             if text:
                 pages.append(f"## Страница {page_index}\n\n{text}")
     return "\n\n".join(pages)
+
+
+def convert_docx_direct(file_path: Path) -> str:
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(file_path) as archive:
+        try:
+            xml_bytes = archive.read("word/document.xml")
+        except KeyError as exc:
+            raise RuntimeError("DOCX не содержит основного текста word/document.xml.") from exc
+
+    root = ET.fromstring(xml_bytes)
+    body = root.find(f".//{word_tag('body')}")
+    if body is None:
+        raise RuntimeError("В DOCX не найден основной текст.")
+
+    blocks: list[str] = []
+    for child in body:
+        if child.tag == word_tag("p"):
+            paragraph = extract_docx_paragraph_text(child)
+            if paragraph:
+                blocks.append(paragraph)
+        elif child.tag == word_tag("tbl"):
+            table = extract_docx_table(child)
+            if table:
+                blocks.append(table)
+
+    result = "\n\n".join(blocks).strip()
+    if not result:
+        raise RuntimeError("Встроенное чтение DOCX не извлекло текст.")
+    return result
+
+
+def word_tag(name: str) -> str:
+    return f"{{http://schemas.openxmlformats.org/wordprocessingml/2006/main}}{name}"
+
+
+def extract_docx_paragraph_text(paragraph) -> str:
+    parts: list[str] = []
+    for node in paragraph.iter():
+        if node.tag == word_tag("t") and node.text:
+            parts.append(node.text)
+        elif node.tag == word_tag("tab"):
+            parts.append("\t")
+        elif node.tag in {word_tag("br"), word_tag("cr")}:
+            parts.append("\n")
+    return clean_docx_text("".join(parts))
+
+
+def extract_docx_table(table) -> str:
+    rows: list[list[str]] = []
+    for row in table.findall(f".//{word_tag('tr')}"):
+        cells: list[str] = []
+        for cell in row.findall(f"./{word_tag('tc')}"):
+            paragraphs = [
+                extract_docx_paragraph_text(paragraph)
+                for paragraph in cell.findall(f".//{word_tag('p')}")
+            ]
+            cell_text = " ".join(part for part in paragraphs if part)
+            cells.append(escape_markdown_table_cell(cell_text))
+        if any(cells):
+            rows.append(cells)
+
+    if not rows:
+        return ""
+
+    width = max(len(row) for row in rows)
+    normalized = [row + [""] * (width - len(row)) for row in rows]
+    header = normalized[0]
+    separator = ["---"] * width
+    body_rows = normalized[1:]
+
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(separator) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in body_rows)
+    return "\n".join(lines)
+
+
+def clean_docx_text(text: str) -> str:
+    text = normalize_newlines(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return text.strip()
+
+
+def escape_markdown_table_cell(text: str) -> str:
+    return clean_docx_text(text).replace("|", "\\|").replace("\n", " / ")
 
 
 def extract_result_text(result) -> str:
