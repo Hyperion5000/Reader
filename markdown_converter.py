@@ -218,7 +218,6 @@ def process_document(
     problem_dir: Path,
     tesseract_info: dict,
 ) -> ConversionResult:
-    processed_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     doc_type = detect_doc_type(file_path)
     method = ""
     warning = ""
@@ -265,14 +264,13 @@ def process_document(
         status = "требует проверки" if status == "успешно" else status
         warning = join_warning(warning, "В Tesseract не найден русский язык rus.")
 
-    header = build_header(file_path, processed_at, doc_type, method or "не выполнено", warning)
     clean_path = clean_dir / output_name
 
-    clean_text = header + ("\n\n" + raw_markdown if raw_markdown else f"\n\nОшибка: {error}\n")
+    clean_text = raw_markdown.strip() + "\n" if raw_markdown else f"Ошибка: {error}\n"
     if raw_markdown:
         cleaned_body = conservative_cleanup(raw_markdown)
         if cleaned_body.strip():
-            clean_text = header + "\n\n" + cleaned_body.strip() + "\n"
+            clean_text = cleaned_body.strip() + "\n"
     clean_path.write_text(clean_text, encoding="utf-8")
 
     if status != "успешно":
@@ -742,21 +740,6 @@ def get_tesseract_info() -> dict:
         except Exception:
             languages = []
     return {"path": path, "languages": languages, "tessdata_dir": tessdata_dir, "version": tesseract_version}
-
-
-def build_header(source: Path, processed_at: str, doc_type: str, method: str, warning: str) -> str:
-    warning_line = f"warning: {warning}" if warning else "warning: нет"
-    return "\n".join(
-        [
-            "<!--",
-            f"source: {source}",
-            f"processed_at: {processed_at}",
-            f"document_type: {doc_type}",
-            f"method: {method}",
-            warning_line,
-            "-->",
-        ]
-    )
 
 
 def build_problem_note(source: Path, doc_type: str, method: str, status: str, warning: str, error: str) -> str:
