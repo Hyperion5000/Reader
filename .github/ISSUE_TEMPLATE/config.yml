@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support and privacy guidance
+    url: https://github.com/Hyperion5000/Reader/blob/main/SUPPORT.md
+    about: Read this before sharing OCR or document conversion problems.

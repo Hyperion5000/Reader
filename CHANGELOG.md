@@ -6,6 +6,7 @@ All notable changes to Reader are documented here.
 
 - Added MIT license and open-source contributor documentation.
 - Added GitHub issue templates and CI checks.
+- Added pull request template, Dependabot config, support guide, code of conduct, and release process documentation.
 - Added a portable Windows build script for `Reader_Portable.exe`.
 - Added synthetic examples, release notes, and triage plan for the first OSS release.
 - Added minimal tests for DOCX extraction, OCR page decisions, output metadata, and skipped technical folders.

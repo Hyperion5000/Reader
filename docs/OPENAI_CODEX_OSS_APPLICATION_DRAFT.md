@@ -28,8 +28,8 @@ API credits would support OSS maintenance: PR review, issue triage, security/cod
 
 ## Additional note
 
-Reader is designed for privacy-sensitive workflows. It does not intentionally upload source documents or extracted text. The project is being prepared with OSS documentation, CI, release workflow, issue templates, and a portable Windows build process.
+Reader is designed for privacy-sensitive workflows. It does not intentionally upload source documents or extracted text. The project is prepared with OSS documentation, CI, release workflow, issue templates, pull request template, Dependabot, support policy, and a portable Windows build process.
 
 Short version for the form, under 500 characters:
 
-Reader is privacy-first: source documents and extracted text stay on the user's Windows computer. The repository now includes MIT licensing, docs, tests, issue templates, release workflow notes, third-party notices, and a portable build process. The first release targets non-technical users who need Russian OCR without installing Python.
+Reader is privacy-first: source documents and extracted text stay on the user's Windows computer. The repository includes MIT licensing, docs, tests, issue/PR templates, release workflow notes, third-party notices, Dependabot, and a portable build process for users who need Russian OCR without installing Python.
