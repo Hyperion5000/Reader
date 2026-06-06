@@ -33,3 +33,11 @@ Reader is designed for privacy-sensitive workflows. It does not intentionally up
 Short version for the form, under 500 characters:
 
 Reader is privacy-first: source documents and extracted text stay on the user's Windows computer. The repository includes MIT licensing, docs, tests, issue/PR templates, release workflow notes, third-party notices, Dependabot, and a portable build process for users who need Russian OCR without installing Python.
+
+## AI-assisted maintenance note
+
+Recommended wording:
+
+```text
+Reader was developed and prepared with AI-assisted maintainer workflows. I remain the primary maintainer; Codex/GPT helps with code review, tests, documentation, release preparation, and issue triage.
+```

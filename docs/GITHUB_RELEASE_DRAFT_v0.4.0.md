@@ -25,6 +25,8 @@ Reader v0.4.0 is the first OSS-ready portable release candidate.
 
 Download `Reader_Portable.exe` from the release assets below.
 
+Optional verification: compare the downloaded file with `Reader_Portable.exe.sha256.txt`.
+
 ### First Run
 
 1. Open `Reader_Portable.exe`.

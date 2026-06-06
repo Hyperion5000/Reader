@@ -40,8 +40,14 @@ git push origin v0.4.0
 1. Open GitHub Releases.
 2. Create a release from the version tag.
 3. Use the release notes from `docs/RELEASE_NOTES_v0.4.0.md`.
-4. Upload `release/Reader_Portable.exe`.
-5. Download the uploaded exe on Windows and run:
+4. Create a checksum:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\write_release_checksum.ps1
+```
+
+5. Upload `release/Reader_Portable.exe` and `release/Reader_Portable.exe.sha256.txt`.
+6. Download the uploaded exe on Windows and run:
 
 ```powershell
 Reader_Portable.exe --check
