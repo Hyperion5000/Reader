@@ -138,7 +138,7 @@ def print_environment_check() -> None:
     print(f"- Python: {sys.version.split()[0]}")
     print(f"- Docling: {package_state('docling', 'docling')}")
     print(f"- MarkItDown: {package_state('markitdown', 'markitdown')}")
-    print(f"- PyMuPDF: {package_state('fitz', 'pymupdf')}")
+    print(f"- PDFium: {package_state('pypdfium2', 'pypdfium2')}")
     tess = get_tesseract_info()
     if tess["path"]:
         langs = ", ".join(tess["languages"]) if tess["languages"] else "языки не определены"
@@ -316,10 +316,10 @@ def get_page_count(file_path: Path) -> int | None:
     if file_path.suffix.lower() != ".pdf":
         return None
     try:
-        import fitz
+        import pypdfium2 as pdfium
 
-        with fitz.open(file_path) as document:
-            return document.page_count
+        with pdfium.PdfDocument(str(file_path)) as document:
+            return len(document)
     except Exception:
         return None
 
@@ -353,15 +353,27 @@ def get_pdf_page_text_counts(file_path: Path) -> list[int]:
 
 def get_pdf_page_texts(file_path: Path) -> list[str]:
     try:
-        import fitz
+        import pypdfium2 as pdfium
 
         texts: list[str] = []
-        with fitz.open(file_path) as doc:
-            for page in doc:
-                texts.append(normalize_newlines(page.get_text("text")).strip())
+        with pdfium.PdfDocument(str(file_path)) as document:
+            for page_index in range(len(document)):
+                page = document[page_index]
+                try:
+                    texts.append(extract_pdfium_page_text(page))
+                finally:
+                    page.close()
         return texts
     except Exception:
         return []
+
+
+def extract_pdfium_page_text(page) -> str:
+    text_page = page.get_textpage()
+    try:
+        return normalize_newlines(text_page.get_text_range()).strip()
+    finally:
+        text_page.close()
 
 
 def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[str, str]:
@@ -381,13 +393,13 @@ def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[
                 ("Постранично: текст+OCR", lambda: convert_pdf_page_by_page(file_path, tesseract_info)),
                 ("Docling OCR", lambda: convert_with_docling(file_path, use_ocr=True, tesseract_info=tesseract_info)),
                 ("MarkItDown", lambda: convert_with_markitdown(file_path)),
-                ("PyMuPDF text", lambda: convert_with_pymupdf_text(file_path)),
+                ("PDFium text", lambda: convert_with_pdfium_text(file_path)),
             ]
         else:
             converters = [
                 ("Docling", lambda: convert_with_docling(file_path, use_ocr=False, tesseract_info=tesseract_info)),
                 ("MarkItDown", lambda: convert_with_markitdown(file_path)),
-                ("PyMuPDF text", lambda: convert_with_pymupdf_text(file_path)),
+                ("PDFium text", lambda: convert_with_pdfium_text(file_path)),
             ]
     else:
         raise RuntimeError("Неподдерживаемый формат файла.")
@@ -439,7 +451,7 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
     if not {"rus", "eng"}.issubset(languages):
         raise RuntimeError("Для OCR нужны языки rus и eng.")
 
-    import fitz
+    import pypdfium2 as pdfium
 
     pages_text: list[str] = []
     tesseract_path = tesseract_info["path"]
@@ -448,23 +460,31 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
     with tempfile.TemporaryDirectory(prefix="pdf_ocr_") as temp_dir:
         temp_path = Path(temp_dir)
         ocr_jobs: list[tuple[int, int, Path]] = []
-        with fitz.open(file_path) as document:
-            if document.page_count == 0:
+        with pdfium.PdfDocument(str(file_path)) as document:
+            page_count = len(document)
+            if page_count == 0:
                 raise RuntimeError("PDF не содержит страниц.")
-            for page_index, page in enumerate(document, start=1):
-                page_text = normalize_newlines(page.get_text("text")).strip()
-                if not should_ocr_pdf_page_text(page_text):
-                    pages_text.append(format_page_text(page_index, page_text))
-                    continue
+            for page_index in range(1, page_count + 1):
+                page = document[page_index - 1]
+                try:
+                    page_text = extract_pdfium_page_text(page)
+                    if not should_ocr_pdf_page_text(page_text):
+                        pages_text.append(format_page_text(page_index, page_text))
+                        continue
 
-                image_path = temp_path / f"page_{page_index:04d}.png"
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), alpha=False)
-                pixmap.save(image_path)
-                if is_probably_blank_image(image_path):
-                    pages_text.append(format_page_text(page_index, ""))
-                    continue
-                preprocess_ocr_image(image_path)
-                ocr_jobs.append((page_index, document.page_count, image_path))
+                    image_path = temp_path / f"page_{page_index:04d}.png"
+                    image = page.render(scale=3.0).to_pil()
+                    try:
+                        image.save(image_path)
+                    finally:
+                        image.close()
+                    if is_probably_blank_image(image_path):
+                        pages_text.append(format_page_text(page_index, ""))
+                        continue
+                    preprocess_ocr_image(image_path)
+                    ocr_jobs.append((page_index, page_count, image_path))
+                finally:
+                    page.close()
 
         if ocr_jobs:
             workers = choose_ocr_worker_count(len(ocr_jobs))
@@ -599,15 +619,19 @@ def build_docling_converter(use_ocr: bool, tesseract_info: dict):
         return DocumentConverter()
 
 
-def convert_with_pymupdf_text(file_path: Path) -> str:
-    import fitz
+def convert_with_pdfium_text(file_path: Path) -> str:
+    import pypdfium2 as pdfium
 
     pages: list[str] = []
-    with fitz.open(file_path) as document:
-        for page_index, page in enumerate(document, start=1):
-            text = page.get_text("text").strip()
-            if text:
-                pages.append(f"## Страница {page_index}\n\n{text}")
+    with pdfium.PdfDocument(str(file_path)) as document:
+        for page_index in range(1, len(document) + 1):
+            page = document[page_index - 1]
+            try:
+                text = extract_pdfium_page_text(page)
+                if text:
+                    pages.append(f"## Страница {page_index}\n\n{text}")
+            finally:
+                page.close()
     return "\n\n".join(pages)
 
 

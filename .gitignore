@@ -25,3 +25,6 @@ build/
 dist/
 *.spec
 *.exe
+release/*.exe
+release/*.zip
+release/*.msi
