@@ -14,16 +14,16 @@ Use this checklist before submitting Reader to Codex for OSS.
 - [x] Dependabot is configured.
 - [x] Portable build script is documented.
 - [x] Synthetic examples are present.
-- [x] Tag `v0.4.0` exists.
+- [x] Tag `v0.4.1` exists.
+- [x] GitHub Release `v0.4.1` is published.
+- [x] `Reader_Portable.exe` is uploaded as a release asset.
+- [x] SHA256 checksum is uploaded as a release asset.
 
 ## Required Manual Steps
 
 - [ ] Enable/fix GitHub Actions so CI is green.
-- [ ] Create GitHub Release `v0.4.0`.
-- [ ] Upload `release/Reader_Portable.exe` as a release asset.
-- [ ] Add the SHA256 checksum from the local release folder.
-- [ ] Open the first roadmap/triage issues from `docs/ISSUE_DRAFTS.md`.
-- [ ] Add GitHub repository topics: `ocr`, `markdown`, `pdf`, `docx`, `windows`, `russian`, `tesseract`, `privacy`.
+- [x] Open the first roadmap/triage issues from `docs/ISSUE_DRAFTS.md`.
+- [x] Add GitHub repository topics: `ocr`, `markdown`, `pdf`, `docx`, `windows`, `russian`, `tesseract`, `privacy`.
 - [ ] Ask a few real users to download the release and give feedback.
 
 ## Application Fields

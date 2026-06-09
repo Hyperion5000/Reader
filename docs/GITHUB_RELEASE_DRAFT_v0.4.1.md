@@ -1,14 +1,14 @@
-# GitHub Release Draft: Reader v0.4.0
+﻿# GitHub Release Draft: Reader v0.4.1
 
-Use this text when creating the GitHub Release for tag `v0.4.0`.
+Use this text when creating the GitHub Release for tag `v0.4.1`.
 
 ## Title
 
-Reader v0.4.0 - OSS-ready portable release
+Reader v0.4.1 - OSS-ready portable release
 
 ## Body
 
-Reader v0.4.0 is the first OSS-ready portable release candidate.
+Reader v0.4.1 is the first English OSS-ready portable release.
 
 ### Highlights
 
@@ -52,3 +52,4 @@ This release was checked locally on Windows:
 ### Privacy
 
 Reader processes documents locally. Do not attach private documents to public GitHub issues.
+

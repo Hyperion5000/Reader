@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import subprocess
 import unittest
@@ -23,10 +23,10 @@ class RepositoryHygieneTests(unittest.TestCase):
             "docs/AI_ASSISTED_MAINTENANCE.md",
             "docs/CODEX_FOR_OSS_APPLICATION_CHECKLIST.md",
             "docs/FAQ.md",
-            "docs/GITHUB_RELEASE_DRAFT_v0.4.0.md",
+            "docs/GITHUB_RELEASE_DRAFT_v0.4.1.md",
             "docs/ISSUE_DRAFTS.md",
             "docs/OPENAI_CODEX_OSS_APPLICATION_DRAFT.md",
-            "docs/RELEASE_NOTES_v0.4.0.md",
+            "docs/RELEASE_NOTES_v0.4.1.md",
             "docs/RELEASE_PROCESS.md",
             "docs/TRIAGE_PLAN.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
@@ -76,3 +76,4 @@ class RepositoryHygieneTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

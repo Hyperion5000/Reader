@@ -1,4 +1,4 @@
-# Issue Drafts
+﻿# Issue Drafts
 
 These are ready-to-copy GitHub issue drafts for the first public triage items.
 
@@ -45,7 +45,7 @@ Expected output:
 All samples must be anonymized or synthetic.
 ```
 
-## 3. Release v0.4.0 checklist
+## 3. Release v0.4.1 checklist
 
 Labels: `release`
 
@@ -55,8 +55,8 @@ Track the first public Reader release.
 Checklist:
 
 - [ ] GitHub Actions is green.
-- [ ] Tag `v0.4.0` is present.
-- [ ] GitHub Release `v0.4.0` is created.
+- [ ] Tag `v0.4.1` is present.
+- [ ] GitHub Release `v0.4.1` is created.
 - [ ] `Reader_Portable.exe` is uploaded as a release asset.
 - [ ] SHA256 checksum is attached or included in the release notes.
 - [ ] Uploaded exe passes `Reader_Portable.exe --check` on Windows.
@@ -82,3 +82,4 @@ Possible report fields:
 
 The report should not expose private data beyond local output files and should remain optional or lightweight.
 ```
+

@@ -1,6 +1,6 @@
-# Reader v0.4.0 Release Notes
+﻿# Reader v0.4.1 Release Notes
 
-Reader v0.4.0 is the first OSS-ready release candidate.
+Reader v0.4.1 is the first OSS-ready release candidate.
 
 ## Highlights
 
@@ -44,3 +44,4 @@ Checked on Windows before release:
 - [x] Exe excluded from Git source tree.
 - [ ] GitHub Actions green after account Actions access is fixed.
 - [ ] GitHub Release created with `Reader_Portable.exe` asset.
+

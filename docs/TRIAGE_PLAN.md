@@ -1,4 +1,4 @@
-# Triage Plan
+﻿# Triage Plan
 
 Reader is a young project, so issue triage is intentionally simple.
 
@@ -40,7 +40,7 @@ Define a small anonymized benchmark for Russian scanned documents:
 - low-contrast PDF;
 - DOCX with tables and footnotes.
 
-### Release v0.4.0 checklist
+### Release v0.4.1 checklist
 
 Track the first public release:
 
@@ -49,3 +49,4 @@ Track the first public release:
 - `Reader_Portable.exe` uploaded to GitHub Releases;
 - README release link verified;
 - download test on a clean Windows machine.
+

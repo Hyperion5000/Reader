@@ -1,4 +1,4 @@
-# Release Process
+﻿# Release Process
 
 Reader releases are distributed through GitHub Releases, not through tracked `.exe` files in the repository.
 
@@ -31,15 +31,15 @@ release/Reader_Portable.exe
 ## Tag
 
 ```powershell
-git tag -a v0.4.0 -m "Reader v0.4.0"
-git push origin v0.4.0
+git tag -a v0.4.1 -m "Reader v0.4.1"
+git push origin v0.4.1
 ```
 
 ## Publish
 
 1. Open GitHub Releases.
 2. Create a release from the version tag.
-3. Use the release notes from `docs/RELEASE_NOTES_v0.4.0.md`.
+3. Use the release notes from `docs/RELEASE_NOTES_v0.4.1.md`.
 4. Create a checksum:
 
 ```powershell
@@ -58,3 +58,4 @@ Reader_Portable.exe --check
 - Confirm the README release link works.
 - Open or update the release checklist issue.
 - Record known limitations in the release notes.
+
