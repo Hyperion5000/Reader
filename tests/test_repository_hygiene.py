@@ -69,7 +69,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("https://github.com/Hyperion5000/Reader/releases", readme)
-        self.assertIn("Reader не отправляет документы в интернет", readme)
+        self.assertIn("Reader does not upload documents to the internet", readme)
         self.assertIn("docs/AI_ASSISTED_MAINTENANCE.md", readme)
         self.assertIn("docs/RELEASE_PROCESS.md", readme)
 

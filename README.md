@@ -5,185 +5,181 @@
 [![Privacy](https://img.shields.io/badge/privacy-local%20processing-brightgreen.svg)](SECURITY.md)
 [![OCR](https://img.shields.io/badge/OCR-rus%20%7C%20eng%20%7C%20osd-orange.svg)](README.md)
 
-Локальный Windows-конвертер PDF/DOCX в Markdown с русским OCR.
+Local Windows PDF/DOCX to Markdown converter with Russian OCR.
 
-**English summary:** Reader is a local Windows tool that converts PDF and DOCX documents to Markdown. It supports Russian OCR, scanned PDFs, mixed text/OCR PDFs, and Word documents without sending files to cloud services.
+Reader converts folders of PDF and DOCX documents into clean Markdown. It supports scanned PDFs, mixed text/OCR PDFs, Russian OCR, Word tables, Word footnotes, and portable Windows usage without requiring users to install Python.
 
-**Why it matters:** many document-heavy workflows still depend on scanned Russian-language PDFs and Word files. Reader gives non-technical Windows users a portable, private way to turn those documents into searchable Markdown without installing Python or uploading sensitive files to cloud OCR services.
+## Why It Matters
 
-## Зачем это нужно
+Many document-heavy workflows still depend on scanned Russian-language PDFs and Word files. Reader gives non-technical Windows users a portable, private way to turn those documents into searchable Markdown without uploading sensitive files to cloud OCR services.
 
-Reader помогает быстро превратить папку юридических, деловых или архивных документов в Markdown:
+Reader is useful for:
 
-- документы остаются на компьютере пользователя;
-- обычные PDF читаются как текст;
-- PDF-сканы распознаются через Tesseract OCR;
-- смешанные PDF обрабатываются постранично;
-- DOCX читаются встроенно, включая текст, таблицы и Word-сноски;
-- готовый `Reader_Portable.exe` запускается без установки Python.
+- legal and administrative document review;
+- document-heavy private practice workflows;
+- archive cleanup and search preparation;
+- converting scanned Russian PDFs into reusable text;
+- preparing local Markdown files for further private analysis.
 
-Проект особенно полезен для русскоязычной работы с документами на Windows: юристы, делопроизводство, бухгалтерия, архивы, подготовка материалов для анализа и поиска.
+## Quick Start
 
-## Быстрый запуск
+1. Download `Reader_Portable.exe` from [GitHub Releases](https://github.com/Hyperion5000/Reader/releases).
+2. Open `Reader_Portable.exe`.
+3. Choose a folder with PDF/DOCX documents.
+4. Wait until processing finishes.
+5. Open the generated `markdown_result_...` folder.
 
-1. Скачайте `Reader_Portable.exe` из [GitHub Releases](https://github.com/Hyperion5000/Reader/releases).
-2. Откройте `Reader_Portable.exe`.
-3. Выберите папку с PDF/DOCX-документами.
-4. Дождитесь завершения обработки.
-5. Откройте созданную папку `markdown_result_...`.
+The main output file is `00_ALL_DOCUMENTS.md`.
 
-Главный результат находится в `00_ALL_DOCUMENTS.md`.
+## Output Structure
 
-## Что создаётся
+- `00_ALL_DOCUMENTS.md` - one combined Markdown file with all processed documents.
+- `01_markdown` - separate Markdown files for each document.
+- `02_problem_files` - created only when a file needs manual review.
 
-- `00_ALL_DOCUMENTS.md` - один общий Markdown-файл со всеми документами.
-- `01_markdown` - отдельные Markdown-файлы по каждому документу.
-- `02_problem_files` - появляется только если какой-то файл требует ручной проверки.
+Generated Markdown files do not contain technical HTML metadata headers such as `source`, `processed_at`, or `method`.
 
-Отдельные Markdown-файлы не содержат технических HTML-шапок вроде `source`, `processed_at` или `method`.
+## Supported Inputs
 
-## Что обрабатывается
+- PDFs with a normal text layer.
+- Fully scanned PDFs.
+- Mixed PDFs where some pages contain text and other pages are scans.
+- DOCX files with text, tables, footnotes, and endnotes.
 
-- PDF с обычным текстовым слоем.
-- Отсканированные PDF.
-- Смешанные PDF, где часть страниц с текстом, а часть является сканом.
-- DOCX, включая текст, таблицы и сноски.
+Old `.doc` files are not supported directly. Re-save them as `.docx` or PDF first.
 
-Старые Word-файлы `.doc` не обрабатываются. Их лучше пересохранить в `.docx` или PDF.
+## OCR Behavior
 
-## Как работает OCR
+The portable build uses Tesseract OCR with `rus`, `eng`, and `osd` language data.
 
-В переносимой сборке используется Tesseract OCR с языками `rus`, `eng` и `osd`.
+PDFs are processed page by page:
 
-PDF обрабатываются постранично:
+- pages with a good text layer are read directly;
+- scanned pages are sent to OCR;
+- broken PDF text layers are detected and sent to OCR;
+- nearly blank pages are filtered before OCR;
+- multiple OCR pages are processed in parallel.
 
-- если на странице нормальный текст, программа берет его напрямую;
-- если страница похожа на скан, запускается OCR;
-- если встроенный текстовый слой похож на нечитаемый набор символов, программа тоже запускает OCR;
-- почти пустые страницы отсекаются, чтобы OCR не превращал шум в случайный текст;
-- несколько OCR-страниц обрабатываются параллельно.
+## Example Result
 
-## Пример результата
+Input: a folder with PDF/DOCX documents.
 
-Вход: папка с PDF/DOCX.
-
-Выход:
+Output:
 
 ```text
 markdown_result_2026-06-04_18-54/
 ├─ 00_ALL_DOCUMENTS.md
 └─ 01_markdown/
-   ├─ договор.md
-   ├─ претензия.md
-   └─ экспертиза.md
+   ├─ contract.md
+   ├─ notice.md
+   └─ report.md
 ```
 
-Фрагмент Markdown:
+Example Markdown fragment:
 
 ```markdown
-# Документ 1: претензия.pdf
+# Document 1: scanned_notice.pdf
 
-- Тип: PDF-скан
-- Метод: Постранично: текст+OCR
-- Статус: успешно
+- Type: PDF scan
+- Method: Page-by-page text+OCR
+- Status: success
 
-## Страница 1
+## Page 1
 
-Текст документа...
+Extracted document text...
 ```
 
-Безопасные синтетические примеры результата лежат в [examples/sample_result](examples/sample_result). В них нет реальных документов или личных данных.
+Safe synthetic examples are available in [examples/sample_result](examples/sample_result). They do not contain real private documents or personal data.
 
-## Запуск из исходников
+## Run From Source
 
-Обычному пользователю это не нужно. Используйте готовый `Reader_Portable.exe`.
+Most users should use `Reader_Portable.exe`. Source usage is intended for development.
 
-Для разработки:
+Development setup:
 
-1. Установите Python 3.12.
-2. Откройте `scripts/Запустить_конвертер.bat`.
-3. При первом запуске будет создана локальная папка `runtime/.venv`.
-4. Компоненты будут установлены из `config/requirements.txt`.
+1. Install Python 3.12 on Windows.
+2. Create a virtual environment or use the existing helper scripts in `scripts/`.
+3. Dependencies are installed from `config/requirements.txt`.
 
-Проверка среды:
+Environment check:
 
 ```powershell
-scripts\Проверить_среду.bat
+python src\reader\markdown_converter.py --check
 ```
 
-## Сборка portable exe
+## Build Portable EXE
 
-Сборка выполняется локально на Windows:
+Build on Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 ```
 
-Результат появится в:
+Output:
 
 ```text
 release/Reader_Portable.exe
 ```
 
-Готовый exe не хранится в Git. Для публичного распространения используйте GitHub Releases.
+The portable exe is not stored in Git. Public binaries should be published through GitHub Releases.
 
-## Структура проекта
+## Project Structure
 
-- `src/reader/markdown_converter.py` - основной код.
-- `config/requirements.txt` - зависимости для запуска из исходников.
-- `config/build-requirements.txt` - зависимости для сборки exe.
-- `scripts/` - запуск, проверка среды, установка OCR, сборка exe.
-- `tests/` - минимальные автоматические тесты.
-- `docs/` - дополнительные документы проекта.
-- `examples/` - безопасные синтетические примеры результата.
-- `.github/` - CI, issue templates, pull request template, Dependabot.
-- `runtime/` - локальная техническая папка, не загружается в Git.
+- `src/reader/markdown_converter.py` - main application code.
+- `config/requirements.txt` - source runtime dependencies.
+- `config/build-requirements.txt` - portable exe build dependencies.
+- `scripts/` - launch, environment check, OCR setup, build, and release checksum scripts.
+- `tests/` - automated tests.
+- `docs/` - project documentation.
+- `examples/` - safe synthetic output examples.
+- `.github/` - CI, issue templates, pull request template, and Dependabot.
+- `runtime/` - local technical folder, excluded from Git.
 
-## Тесты
+## Tests
 
 ```powershell
 python -m py_compile src/reader/markdown_converter.py
 python -m unittest discover -s tests
 ```
 
-CI запускает эти проверки автоматически.
+CI runs these checks automatically when GitHub Actions is available.
 
-## Приватность
+## Privacy
 
-Reader не отправляет документы в интернет. Исходные PDF/DOCX, результаты `markdown_result_...`, OCR-данные, `runtime/` и `.exe` файлы исключены из Git.
+Reader does not upload documents to the internet. Source PDFs/DOCX files, generated `markdown_result_...` folders, OCR data, `runtime/`, and `.exe` files are excluded from Git.
 
-Не прикладывайте реальные личные документы к публичным issue. Используйте обезличенные или синтетические примеры.
+Do not attach real private documents to public GitHub issues. Use anonymized or synthetic examples.
 
-## Сопровождение
+## Maintenance
 
-- Лицензия: MIT.
-- Лицензии сторонних компонентов: см. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- Вклад: см. [CONTRIBUTING.md](CONTRIBUTING.md).
-- Безопасность: см. [SECURITY.md](SECURITY.md).
-- Поддержка: см. [SUPPORT.md](SUPPORT.md).
-- Правила общения: см. [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-- Процесс релиза: см. [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
-- Планы развития: см. [ROADMAP.md](ROADMAP.md).
-- Triage: см. [docs/TRIAGE_PLAN.md](docs/TRIAGE_PLAN.md).
-- Готовые issue: см. [docs/ISSUE_DRAFTS.md](docs/ISSUE_DRAFTS.md).
-- AI-assisted сопровождение: см. [docs/AI_ASSISTED_MAINTENANCE.md](docs/AI_ASSISTED_MAINTENANCE.md).
-- FAQ: см. [docs/FAQ.md](docs/FAQ.md).
+- License: MIT.
+- Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Security: [SECURITY.md](SECURITY.md).
+- Support: [SUPPORT.md](SUPPORT.md).
+- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- Release process: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
+- Roadmap: [ROADMAP.md](ROADMAP.md).
+- Triage: [docs/TRIAGE_PLAN.md](docs/TRIAGE_PLAN.md).
+- Issue drafts: [docs/ISSUE_DRAFTS.md](docs/ISSUE_DRAFTS.md).
+- AI-assisted maintenance: [docs/AI_ASSISTED_MAINTENANCE.md](docs/AI_ASSISTED_MAINTENANCE.md).
+- FAQ: [docs/FAQ.md](docs/FAQ.md).
 
-## Актуальность инструментов
+## Tooling Status
 
-Проверено 06.06.2026:
+Checked on 2026-06-09:
 
 - `docling==2.97.0`.
 - `markitdown[pdf,docx]==0.1.6`.
 - `pypdfium2==5.9.0`.
 - `pillow==12.2.0`.
 - `pyinstaller==6.20.0`.
-- Tesseract OCR в переносимой сборке: 5.4.0 с русским OCR.
+- Portable Tesseract OCR bundle: 5.4.0 with Russian OCR data.
 
-По официальному репозиторию Tesseract последняя версия движка - 5.5.2. В текущей portable-сборке оставлена проверенная Windows-сборка 5.4.0, потому что для exe важнее стабильность запуска на обычном ПК. Обновление до 5.5.x запланировано после отдельного теста качества и переносимости.
+The latest official Tesseract line is newer than the bundled Windows build. Reader keeps the verified portable Windows bundle for now because reliable startup on ordinary PCs is more important than changing OCR engines without a separate quality test. Migration to a newer Tesseract 5.5.x build is tracked in the roadmap.
 
-Проверенные альтернативы:
+Checked alternatives:
 
-- PaddleOCR может быть сильнее на сложных OCR-задачах, но заметно тяжелее для переносимого `.exe`.
-- OCRmyPDF полезен для добавления OCR-слоя в PDF, но не решает задачу прямой конвертации PDF/DOCX в Markdown.
-- NAPS2 удобен как отдельная программа для сканирования, но не подходит как минимальная основа этого конвертера.
+- PaddleOCR may be stronger for some difficult OCR cases, but it is much heavier for a portable Windows exe.
+- OCRmyPDF is useful for adding an OCR layer to PDFs, but it does not solve direct PDF/DOCX to Markdown conversion.
+- NAPS2 is useful as a separate scanning application, but not as the minimal base for this converter.

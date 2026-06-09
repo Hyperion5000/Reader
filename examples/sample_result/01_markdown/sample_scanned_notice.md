@@ -1,13 +1,13 @@
 # sample_scanned_notice.pdf
 
-## Страница 1
+## Page 1
 
-Уведомление
+Notice
 
-Настоящий пример показывает, как Reader оформляет текст, полученный через OCR.
+This example shows how Reader formats text extracted through OCR.
 
-## Страница 2
+## Page 2
 
-Приложение
+Attachment
 
-Синтетическая страница без персональных данных.
+Synthetic page without personal data.

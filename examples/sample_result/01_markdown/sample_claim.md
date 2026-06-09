@@ -1,16 +1,16 @@
-# Исковое заявление
+# Claim Statement
 
-Истец: Иванов И. И.
+Claimant: Sample Person.
 
-Ответчик: ООО "Пример".
+Defendant: Example LLC.
 
-Требование: взыскать условную сумму по договору.
+Request: recover a synthetic contract amount.
 
-| Показатель | Значение |
+| Field | Value |
 | --- | --- |
-| Договор | N 001 |
-| Сумма | 100 000 руб. |
+| Contract | N 001 |
+| Amount | 100,000 RUB |
 
-## Сноски
+## Footnotes
 
-[1] Синтетическая сноска для проверки обработки Word footnotes.
+[1] Synthetic footnote used to verify Word footnote extraction.

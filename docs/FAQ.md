@@ -1,33 +1,33 @@
 # FAQ
 
-## Reader отправляет документы в интернет?
+## Does Reader upload documents to the internet?
 
-Нет. Reader обрабатывает PDF/DOCX локально на компьютере пользователя.
+No. Reader processes PDF/DOCX files locally on the user's Windows computer.
 
-## Нужно ли устанавливать Python?
+## Do users need to install Python?
 
-Для готового `Reader_Portable.exe` Python не нужен. Python нужен только разработчикам, которые запускают проект из исходников.
+No for the portable build. `Reader_Portable.exe` is intended for users who cannot or do not want to install Python. Python is needed only for development from source.
 
-## Где взять `Reader_Portable.exe`?
+## Where can I get `Reader_Portable.exe`?
 
-Готовый exe должен публиковаться в GitHub Releases:
+Portable builds should be published through GitHub Releases:
 
 https://github.com/Hyperion5000/Reader/releases
 
-Exe не хранится в Git-репозитории, потому что это большой сборочный файл.
+The exe is not stored in the Git repository because it is a large build artifact.
 
-## Почему Tesseract, а не PaddleOCR?
+## Why Tesseract instead of PaddleOCR?
 
-Tesseract легче для переносимой Windows-сборки и хорошо подходит для локального OCR без облака. PaddleOCR может быть сильнее на некоторых сложных документах, но заметно тяжелее и хуже подходит для минимального portable exe.
+Tesseract is lighter for a portable Windows build and works well for local OCR without cloud services. PaddleOCR may be stronger for some difficult documents, but it is heavier and less suitable for a minimal portable exe.
 
-## Что делать со старыми `.doc` файлами?
+## What should I do with old `.doc` files?
 
-Пересохраните их в `.docx` или PDF. Старый формат `.doc` не поддерживается напрямую.
+Re-save them as `.docx` or PDF. The old `.doc` format is not supported directly.
 
-## Почему некоторые OCR-сканы надо проверять вручную?
+## Why do some OCR results require manual review?
 
-OCR зависит от качества скана: наклон, шум, печати, рукописные пометки и плохой контраст могут ухудшить результат. Reader отмечает подозрительные документы в `02_problem_files`.
+OCR quality depends on scan quality. Rotation, noise, stamps, handwriting, and poor contrast can reduce accuracy. Reader can mark suspicious files in `02_problem_files`.
 
-## Можно ли использовать Reader для юридически важных документов?
+## Can Reader be used for legally important documents?
 
-Да, как инструмент извлечения текста. Для юридически важных мест OCR-результат нужно сверять с оригинальным PDF.
+Yes, as a text extraction tool. For legally important text, OCR results should always be checked against the original PDF.

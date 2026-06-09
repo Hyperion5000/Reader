@@ -16,7 +16,7 @@ Reader is a local Windows-focused PDF/DOCX to Markdown converter. The project va
 
 1. Install Python 3.12 on Windows.
 2. Open PowerShell in the repository root.
-3. Run `scripts/Запустить_конвертер.bat` once, or create your own virtual environment.
+3. Create a local virtual environment, or use the helper scripts in `scripts/`.
 4. Run checks:
 
 ```powershell
