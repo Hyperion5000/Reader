@@ -52,4 +52,3 @@ This release was checked locally on Windows:
 ### Privacy
 
 Reader processes documents locally. Do not attach private documents to public GitHub issues.
-

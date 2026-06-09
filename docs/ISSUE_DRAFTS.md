@@ -82,4 +82,3 @@ Possible report fields:
 
 The report should not expose private data beyond local output files and should remain optional or lightweight.
 ```
-

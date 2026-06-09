@@ -49,4 +49,3 @@ Track the first public release:
 - `Reader_Portable.exe` uploaded to GitHub Releases;
 - README release link verified;
 - download test on a clean Windows machine.
-

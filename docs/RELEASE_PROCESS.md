@@ -58,4 +58,3 @@ Reader_Portable.exe --check
 - Confirm the README release link works.
 - Open or update the release checklist issue.
 - Record known limitations in the release notes.
-
