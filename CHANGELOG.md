@@ -2,10 +2,11 @@
 
 All notable changes to Reader are documented here.
 
-## Unreleased
+## 0.4.2 - Processing reports
 
 - Added `REPORT.txt` with a short processing summary for each run.
 - Added `OCR_REPORT.txt` with page-level OCR details for scanned and mixed PDFs.
+- Added manual GitHub Actions dispatch support for easier CI rechecks after account Actions access is fixed.
 
 ## 0.4.0 - OSS readiness
 
