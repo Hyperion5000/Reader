@@ -2,6 +2,11 @@
 
 All notable changes to Reader are documented here.
 
+## Unreleased
+
+- Added `REPORT.txt` with a short processing summary for each run.
+- Added `OCR_REPORT.txt` with page-level OCR details for scanned and mixed PDFs.
+
 ## 0.4.0 - OSS readiness
 
 - Added MIT license and open-source contributor documentation.

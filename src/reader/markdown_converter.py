@@ -13,7 +13,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Callable
@@ -31,6 +31,14 @@ SKIP_DIR_NAMES = {".venv", "__pycache__", "build", "dist", "runtime", "tessdata"
 
 
 @dataclass
+class PageOcrEntry:
+    page_index: int
+    source: str
+    char_count: int
+    warning: str = ""
+
+
+@dataclass
 class ConversionResult:
     source: Path
     output_name: str
@@ -42,6 +50,10 @@ class ConversionResult:
     cyrillic_ratio: float
     replacement_count: int
     quality_status: str
+    text_page_count: int = 0
+    ocr_page_count: int = 0
+    blank_page_count: int = 0
+    page_report: list[PageOcrEntry] = field(default_factory=list)
     warning: str = ""
     error: str = ""
 
@@ -65,6 +77,7 @@ def main() -> int:
         print(f"Папка не найдена: {source_dir}")
         return 1
 
+    started_at = dt.datetime.now()
     print(f"Папка с документами: {source_dir}")
     print_environment_check()
 
@@ -98,10 +111,15 @@ def main() -> int:
         results.append(result)
         print(f"Результат: {result.status}. Символов: {result.char_count}. {result.warning}".strip())
 
+    finished_at = dt.datetime.now()
     write_combined_markdown_file(result_dir, clean_dir, results)
+    write_run_report_file(result_dir, source_dir, results, tesseract_info, started_at, finished_at)
+    write_ocr_report_file(result_dir, results, started_at, finished_at)
     print("\nГотово.")
     print(f"Папка результата: {result_dir}")
     print(f"Общий файл: {result_dir / '00_ALL_DOCUMENTS.md'}")
+    print(f"Отчет: {result_dir / 'REPORT.txt'}")
+    print(f"OCR-отчет: {result_dir / 'OCR_REPORT.txt'}")
     if args.open_result:
         open_result_folder(result_dir)
     return 0
@@ -230,9 +248,10 @@ def process_document(
     quality_status = "нет текста"
     cyrillic_ratio = 0.0
     replacement_count = 0
+    page_report: list[PageOcrEntry] = []
 
     try:
-        raw_markdown, method = convert_file(file_path, doc_type, tesseract_info)
+        raw_markdown, method, page_report = convert_file(file_path, doc_type, tesseract_info)
         raw_markdown = normalize_newlines(raw_markdown).strip()
         if not raw_markdown:
             raise RuntimeError("Конвертер вернул пустой текст.")
@@ -291,6 +310,10 @@ def process_document(
         cyrillic_ratio=cyrillic_ratio,
         replacement_count=replacement_count,
         quality_status=quality_status,
+        text_page_count=sum(1 for page in page_report if page.source == "text"),
+        ocr_page_count=sum(1 for page in page_report if page.source == "ocr"),
+        blank_page_count=sum(1 for page in page_report if page.source == "blank"),
+        page_report=page_report,
         warning=warning,
         error=error,
     )
@@ -376,9 +399,9 @@ def extract_pdfium_page_text(page) -> str:
         text_page.close()
 
 
-def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[str, str]:
+def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[str, str, list[PageOcrEntry]]:
     errors: list[str] = []
-    converters: list[tuple[str, Callable[[], str]]] = []
+    converters: list[tuple[str, Callable[[], str | tuple[str, list[PageOcrEntry]]]]] = []
 
     if file_path.suffix.lower() == ".docx":
         converters = [
@@ -406,9 +429,14 @@ def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[
 
     for name, converter in converters:
         try:
-            text = converter()
+            converted = converter()
+            if isinstance(converted, tuple):
+                text, page_report = converted
+            else:
+                text = converted
+                page_report = []
             if text and text.strip():
-                return text, name
+                return text, name, page_report
             errors.append(f"{name}: пустой результат")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
@@ -444,7 +472,7 @@ def run_without_library_noise(action: Callable[[], str]) -> str:
             return action()
 
 
-def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
+def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str, list[PageOcrEntry]]:
     if not tesseract_info.get("path"):
         raise RuntimeError("Tesseract OCR не найден.")
     languages = set(tesseract_info.get("languages") or [])
@@ -454,6 +482,7 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
     import pypdfium2 as pdfium
 
     pages_text: list[str] = []
+    page_report: list[PageOcrEntry] = []
     tesseract_path = tesseract_info["path"]
     tessdata_dir = tesseract_info.get("tessdata_dir")
 
@@ -470,6 +499,14 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
                     page_text = extract_pdfium_page_text(page)
                     if not should_ocr_pdf_page_text(page_text):
                         pages_text.append(format_page_text(page_index, page_text))
+                        page_report.append(
+                            PageOcrEntry(
+                                page_index=page_index,
+                                source="text",
+                                char_count=len(page_text.strip()),
+                                warning=assess_page_text_warning(page_text, source="text"),
+                            )
+                        )
                         continue
 
                     image_path = temp_path / f"page_{page_index:04d}.png"
@@ -480,6 +517,14 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
                         image.close()
                     if is_probably_blank_image(image_path):
                         pages_text.append(format_page_text(page_index, ""))
+                        page_report.append(
+                            PageOcrEntry(
+                                page_index=page_index,
+                                source="blank",
+                                char_count=0,
+                                warning="Страница похожа на пустую.",
+                            )
+                        )
                         continue
                     preprocess_ocr_image(image_path)
                     ocr_jobs.append((page_index, page_count, image_path))
@@ -502,12 +547,21 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> str:
             for page_index, _, _ in ocr_jobs:
                 page_text = ocr_results.get(page_index, "")
                 pages_text.append(format_page_text(page_index, page_text))
+                page_report.append(
+                    PageOcrEntry(
+                        page_index=page_index,
+                        source="ocr",
+                        char_count=len(page_text.strip()),
+                        warning=assess_page_text_warning(page_text, source="ocr"),
+                    )
+                )
 
     pages_text.sort(key=page_number_from_markdown)
+    page_report.sort(key=lambda page: page.page_index)
     result = "\n\n".join(page for page in pages_text if page.strip()).strip()
     if not result:
         raise RuntimeError("Tesseract OCR не извлёк текст.")
-    return result
+    return result, page_report
 
 
 def should_ocr_pdf_page_text(page_text: str) -> bool:
@@ -515,6 +569,27 @@ def should_ocr_pdf_page_text(page_text: str) -> bool:
     if len(text) < PDF_TEXT_LAYER_THRESHOLD:
         return True
     return looks_like_bad_pdf_text_layer(text)
+
+
+def assess_page_text_warning(page_text: str, source: str) -> str:
+    text = normalize_newlines(page_text).strip()
+    warnings: list[str] = []
+    if not text:
+        warnings.append("Текст не извлечен.")
+    elif len(text) < PDF_TEXT_LAYER_THRESHOLD:
+        warnings.append("Мало текста.")
+
+    replacement_count = text.count("\uFFFD")
+    if replacement_count:
+        warnings.append(f"Нечитаемые символы: {replacement_count}.")
+
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", text)
+    if source == "ocr" and len(letters) >= 100:
+        cyrillic = re.findall(r"[А-Яа-яЁё]", text)
+        if len(cyrillic) / len(letters) < 0.35:
+            warnings.append("Низкая доля кириллицы после OCR.")
+
+    return " ".join(warnings)
 
 
 def looks_like_bad_pdf_text_layer(text: str) -> bool:
@@ -948,6 +1023,149 @@ def write_combined_markdown_file(result_dir: Path, clean_dir: Path, results: lis
             ]
         )
     (result_dir / "00_ALL_DOCUMENTS.md").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+
+def write_run_report_file(
+    result_dir: Path,
+    source_dir: Path,
+    results: list[ConversionResult],
+    tesseract_info: dict,
+    started_at: dt.datetime,
+    finished_at: dt.datetime,
+) -> None:
+    success_count = sum(1 for item in results if item.status == "успешно")
+    review_count = sum(1 for item in results if item.status == "требует проверки")
+    error_count = sum(1 for item in results if item.status == "ошибка")
+    total_pages = sum(item.page_count or 0 for item in results)
+    total_chars = sum(item.char_count for item in results)
+    total_ocr_pages = sum(item.ocr_page_count for item in results)
+    total_text_pages = sum(item.text_page_count for item in results)
+    total_blank_pages = sum(item.blank_page_count for item in results)
+    total_page_warnings = sum(1 for item in results for page in item.page_report if page.warning)
+
+    tesseract_status = "не найден"
+    if tesseract_info.get("path"):
+        languages = ", ".join(tesseract_info.get("languages") or []) or "языки не определены"
+        version_text = f", версия {tesseract_info.get('version')}" if tesseract_info.get("version") else ""
+        tesseract_status = f"найден{version_text} ({languages})"
+
+    lines = [
+        "Reader report",
+        "",
+        f"Создан: {format_report_datetime(finished_at)}",
+        f"Исходная папка: {source_dir}",
+        f"Папка результата: {result_dir}",
+        f"Время обработки: {format_duration(started_at, finished_at)}",
+        "",
+        "Итог:",
+        f"- документов обработано: {len(results)}",
+        f"- успешно: {success_count}",
+        f"- требует проверки: {review_count}",
+        f"- ошибки: {error_count}",
+        f"- страниц PDF: {total_pages}",
+        f"- страниц OCR: {total_ocr_pages}",
+        f"- страниц прочитано текстовым слоем: {total_text_pages}",
+        f"- пустых/почти пустых страниц: {total_blank_pages}",
+        f"- страниц с замечаниями OCR: {total_page_warnings}",
+        f"- символов извлечено: {total_chars}",
+        f"- Tesseract OCR: {tesseract_status}",
+        "",
+        "Файлы:",
+    ]
+
+    for index, item in enumerate(results, start=1):
+        lines.extend(
+            [
+                f"{index}. {item.source.name}",
+                f"   Статус: {item.status}",
+                f"   Тип: {item.doc_type}",
+                f"   Метод: {item.method}",
+                f"   Markdown: 01_markdown/{item.output_name}",
+                f"   Страниц: {format_optional_int(item.page_count)}",
+                f"   OCR страниц: {item.ocr_page_count}",
+                f"   Текстовый слой: {item.text_page_count}",
+                f"   Пустые страницы: {item.blank_page_count}",
+                f"   Страниц с замечаниями OCR: {sum(1 for page in item.page_report if page.warning)}",
+                f"   Символов: {item.char_count}",
+                f"   Качество: {item.quality_status}",
+                f"   Предупреждение: {item.warning or 'нет'}",
+                f"   Ошибка: {item.error or 'нет'}",
+                "",
+            ]
+        )
+
+    (result_dir / "REPORT.txt").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+
+def write_ocr_report_file(
+    result_dir: Path,
+    results: list[ConversionResult],
+    started_at: dt.datetime,
+    finished_at: dt.datetime,
+) -> None:
+    lines = [
+        "Постраничный OCR-отчет",
+        "",
+        f"Создан: {format_report_datetime(finished_at)}",
+        f"Время обработки: {format_duration(started_at, finished_at)}",
+        "",
+    ]
+
+    page_level_results = [item for item in results if item.page_report]
+    if not page_level_results:
+        lines.append("Постраничный OCR не выполнялся: в обработанных файлах не было PDF-сканов или смешанных PDF.")
+        (result_dir / "OCR_REPORT.txt").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        return
+
+    for item in page_level_results:
+        lines.extend(
+            [
+                f"Файл: {item.source.name}",
+                f"Тип: {item.doc_type}",
+                f"Метод: {item.method}",
+                f"Страниц: {format_optional_int(item.page_count)}",
+                f"OCR страниц: {item.ocr_page_count}",
+                f"Текстовый слой: {item.text_page_count}",
+                f"Пустые страницы: {item.blank_page_count}",
+                "",
+                "Страницы:",
+            ]
+        )
+        for page in item.page_report:
+            warning = page.warning or "нет"
+            lines.append(
+                f"- стр. {page.page_index}: {format_page_source(page.source)}, "
+                f"символов: {page.char_count}, замечание: {warning}"
+            )
+        lines.append("")
+
+    (result_dir / "OCR_REPORT.txt").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+
+def format_report_datetime(value: dt.datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:
+    seconds = max(0, int((finished_at - started_at).total_seconds()))
+    minutes, rest = divmod(seconds, 60)
+    if minutes:
+        return f"{minutes} мин {rest} сек"
+    return f"{rest} сек"
+
+
+def format_optional_int(value: int | None) -> str:
+    return str(value) if value is not None else "не определено"
+
+
+def format_page_source(source: str) -> str:
+    if source == "ocr":
+        return "OCR"
+    if source == "text":
+        return "текстовый слой"
+    if source == "blank":
+        return "пустая/почти пустая"
+    return source
 
 
 def normalize_newlines(text: str) -> str:

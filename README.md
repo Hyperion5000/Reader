@@ -34,6 +34,8 @@ The main output file is `00_ALL_DOCUMENTS.md`.
 ## Output Structure
 
 - `00_ALL_DOCUMENTS.md` - one combined Markdown file with all processed documents.
+- `REPORT.txt` - short processing summary: files, status, OCR pages, warnings, and errors.
+- `OCR_REPORT.txt` - page-level PDF OCR report for scanned and mixed PDFs.
 - `01_markdown` - separate Markdown files for each document.
 - `02_problem_files` - created only when a file needs manual review.
 
@@ -69,6 +71,8 @@ Output:
 ```text
 markdown_result_2026-06-04_18-54/
 ├─ 00_ALL_DOCUMENTS.md
+├─ REPORT.txt
+├─ OCR_REPORT.txt
 └─ 01_markdown/
    ├─ contract.md
    ├─ notice.md

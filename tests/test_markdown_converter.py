@@ -82,7 +82,7 @@ class ReaderConversionTests(unittest.TestCase):
     def test_process_document_writes_no_metadata_header(self) -> None:
         original_convert_file = converter.convert_file
         try:
-            converter.convert_file = lambda *_args, **_kwargs: ("Основной текст", "test")
+            converter.convert_file = lambda *_args, **_kwargs: ("Основной текст", "test", [])
             with tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
                 source = root / "sample.docx"
@@ -107,6 +107,55 @@ class ReaderConversionTests(unittest.TestCase):
         self.assertFalse(converter.should_ocr_pdf_page_text("Это нормальный русский текст документа " * 5))
         bad_layer = "\n".join(["z", "q", "x", "F", "E", "a", "o", "N"] * 20)
         self.assertTrue(converter.should_ocr_pdf_page_text(bad_layer))
+
+    def test_report_files_include_summary_and_page_ocr_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result_dir = root / "markdown_result_test"
+            result_dir.mkdir()
+            source = root / "scan.pdf"
+            source.write_text("placeholder", encoding="utf-8")
+            result = converter.ConversionResult(
+                source=source,
+                output_name="scan.md",
+                doc_type="PDF-скан",
+                method="Постранично: текст+OCR",
+                status="успешно",
+                char_count=1200,
+                page_count=2,
+                cyrillic_ratio=0.9,
+                replacement_count=0,
+                quality_status="норма",
+                text_page_count=1,
+                ocr_page_count=1,
+                blank_page_count=0,
+                page_report=[
+                    converter.PageOcrEntry(page_index=1, source="text", char_count=700),
+                    converter.PageOcrEntry(page_index=2, source="ocr", char_count=500, warning="Мало текста."),
+                ],
+            )
+
+            started = converter.dt.datetime(2026, 6, 10, 10, 0, 0)
+            finished = converter.dt.datetime(2026, 6, 10, 10, 0, 5)
+            converter.write_run_report_file(
+                result_dir,
+                root,
+                [result],
+                {"path": "tesseract.exe", "version": "5.4.0", "languages": ["eng", "osd", "rus"]},
+                started,
+                finished,
+            )
+            converter.write_ocr_report_file(result_dir, [result], started, finished)
+
+            run_report = (result_dir / "REPORT.txt").read_text(encoding="utf-8")
+            ocr_report = (result_dir / "OCR_REPORT.txt").read_text(encoding="utf-8")
+
+        self.assertIn("документов обработано: 1", run_report)
+        self.assertIn("страниц OCR: 1", run_report)
+        self.assertIn("страниц с замечаниями OCR: 1", run_report)
+        self.assertIn("scan.pdf", ocr_report)
+        self.assertIn("стр. 2: OCR", ocr_report)
+        self.assertIn("Мало текста.", ocr_report)
 
 
 if __name__ == "__main__":
