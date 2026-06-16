@@ -27,6 +27,7 @@ PDF_TEXT_LAYER_BAD_SINGLE_TOKEN_RATIO = 0.65
 PDF_TEXT_LAYER_BAD_CYRILLIC_RATIO = 0.25
 BLANK_PAGE_DARK_PIXEL_RATIO = 0.01
 MAX_OCR_WORKERS = 4
+PIL_MAX_OCR_IMAGE_PIXELS = 250_000_000
 SKIP_DIR_NAMES = {".venv", "__pycache__", "build", "dist", "runtime", "tessdata"}
 
 
@@ -612,10 +613,17 @@ def looks_like_bad_pdf_text_layer(text: str) -> bool:
     )
 
 
+def configure_pillow_for_ocr(image_module) -> None:
+    current_limit = getattr(image_module, "MAX_IMAGE_PIXELS", None)
+    if current_limit is not None and current_limit < PIL_MAX_OCR_IMAGE_PIXELS:
+        image_module.MAX_IMAGE_PIXELS = PIL_MAX_OCR_IMAGE_PIXELS
+
+
 def is_probably_blank_image(image_path: Path) -> bool:
     try:
         from PIL import Image
 
+        configure_pillow_for_ocr(Image)
         with Image.open(image_path).convert("L") as image:
             histogram = image.histogram()
             dark_pixels = sum(histogram[:245])
@@ -634,6 +642,7 @@ def preprocess_ocr_image(image_path: Path) -> None:
     try:
         from PIL import Image, ImageFilter, ImageOps
 
+        configure_pillow_for_ocr(Image)
         with Image.open(image_path) as image:
             processed = ImageOps.grayscale(image)
             processed = ImageOps.autocontrast(processed, cutoff=1)

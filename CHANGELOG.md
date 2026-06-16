@@ -2,6 +2,10 @@
 
 All notable changes to Reader are documented here.
 
+## 0.4.3 - High-resolution scan handling
+
+- Raised the local OCR image safety limit so normal high-resolution scanned pages no longer print Pillow decompression-bomb warnings during processing.
+
 ## 0.4.2 - Processing reports
 
 - Added `REPORT.txt` with a short processing summary for each run.

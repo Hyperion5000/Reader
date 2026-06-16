@@ -108,6 +108,14 @@ class ReaderConversionTests(unittest.TestCase):
         bad_layer = "\n".join(["z", "q", "x", "F", "E", "a", "o", "N"] * 20)
         self.assertTrue(converter.should_ocr_pdf_page_text(bad_layer))
 
+    def test_configure_pillow_for_ocr_allows_large_scans(self) -> None:
+        class DummyImageModule:
+            MAX_IMAGE_PIXELS = 10
+
+        converter.configure_pillow_for_ocr(DummyImageModule)
+
+        self.assertEqual(DummyImageModule.MAX_IMAGE_PIXELS, converter.PIL_MAX_OCR_IMAGE_PIXELS)
+
     def test_report_files_include_summary_and_page_ocr_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -60,6 +60,7 @@ PDFs are processed page by page:
 - scanned pages are sent to OCR;
 - broken PDF text layers are detected and sent to OCR;
 - nearly blank pages are filtered before OCR;
+- high-resolution scanned pages are allowed within a controlled OCR image limit;
 - multiple OCR pages are processed in parallel.
 
 ## Example Result
