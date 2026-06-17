@@ -29,6 +29,15 @@ BLANK_PAGE_DARK_PIXEL_RATIO = 0.01
 MAX_OCR_WORKERS = 4
 PIL_MAX_OCR_IMAGE_PIXELS = 250_000_000
 SKIP_DIR_NAMES = {".venv", "__pycache__", "build", "dist", "runtime", "tessdata"}
+QUALITY_MODES = {"standard", "max"}
+STANDARD_OCR_DPI = 216
+MAX_OCR_DPI_VALUES = (300, 250, 216)
+STANDARD_OCR_PSM_VALUES = (6,)
+MAX_OCR_PSM_VALUES = (6, 4, 11)
+STANDARD_OCR_VARIANTS = ("contrast_sharp",)
+MAX_OCR_VARIANTS = ("gray", "contrast_sharp", "binary")
+OCR_CONFIDENCE_REVIEW_THRESHOLD = 65.0
+OCR_EARLY_STOP_CONFIDENCE = 88.0
 
 
 @dataclass
@@ -36,6 +45,23 @@ class PageOcrEntry:
     page_index: int
     source: str
     char_count: int
+    warning: str = ""
+    confidence: float | None = None
+    psm: int | None = None
+    dpi: int | None = None
+    variant: str = ""
+    attempt_count: int = 0
+    selected_reason: str = ""
+
+
+@dataclass
+class OcrAttemptResult:
+    text: str
+    confidence: float | None
+    psm: int
+    dpi: int
+    variant: str
+    score: float
     warning: str = ""
 
 
@@ -59,17 +85,211 @@ class ConversionResult:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class ConversionSettings:
+    ocr_languages: tuple[str, ...] = ("rus", "eng")
+    max_ocr_workers: int = MAX_OCR_WORKERS
+    quality_mode: str = "max"
+    tesseract_path: str | None = None
+    tessdata_dir: str | None = None
+    preserve_page_breaks: bool = False
+
+    @property
+    def ocr_language_argument(self) -> str:
+        return "+".join(self.ocr_languages)
+
+    @property
+    def ocr_dpi_values(self) -> tuple[int, ...]:
+        if self.quality_mode == "max":
+            return MAX_OCR_DPI_VALUES
+        return (STANDARD_OCR_DPI,)
+
+    @property
+    def ocr_psm_values(self) -> tuple[int, ...]:
+        if self.quality_mode == "max":
+            return MAX_OCR_PSM_VALUES
+        return STANDARD_OCR_PSM_VALUES
+
+    @property
+    def ocr_variants(self) -> tuple[str, ...]:
+        if self.quality_mode == "max":
+            return MAX_OCR_VARIANTS
+        return STANDARD_OCR_VARIANTS
+
+
+class ProgressReporter:
+    def start(self, total: int, result_dir: Path) -> None:
+        pass
+
+    def begin_file(self, index: int, total: int, file_path: Path) -> None:
+        pass
+
+    def finish_file(self, index: int, total: int, result: ConversionResult) -> None:
+        pass
+
+    def finish(self, result_dir: Path, results: list[ConversionResult]) -> None:
+        pass
+
+
+class TkProgressReporter(ProgressReporter):
+    def __init__(self, settings: ConversionSettings | None = None) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        self._settings = settings or ConversionSettings()
+        self._tk = tk
+        self._closed = False
+        self._root = tk.Tk()
+        self._root.title("Reader")
+        self._root.geometry("520x220")
+        self._root.resizable(False, False)
+        self._root.attributes("-topmost", True)
+        self._root.after(1200, lambda: self._root.attributes("-topmost", False))
+        self._root.protocol("WM_DELETE_WINDOW", self._close)
+
+        frame = ttk.Frame(self._root, padding=18)
+        frame.pack(fill="both", expand=True)
+
+        self._title = ttk.Label(frame, text="Подготовка обработки", font=("Segoe UI", 12, "bold"))
+        self._title.pack(anchor="w")
+        self._file_label = ttk.Label(frame, text="", wraplength=470)
+        self._file_label.pack(anchor="w", pady=(10, 8))
+        self._progress = ttk.Progressbar(frame, orient="horizontal", mode="determinate")
+        self._progress.pack(fill="x")
+        self._status = ttk.Label(frame, text="")
+        self._status.pack(anchor="w", pady=(8, 0))
+        self._button_frame = ttk.Frame(frame)
+        self._button_frame.pack(fill="x", pady=(16, 0))
+
+    def start(self, total: int, result_dir: Path) -> None:
+        if self._closed:
+            return
+        self._progress.configure(maximum=max(1, total), value=0)
+        self._status.configure(text=f"Найдено документов: {total}. OCR: {self._settings.quality_mode}")
+        self._pump()
+
+    def begin_file(self, index: int, total: int, file_path: Path) -> None:
+        if self._closed:
+            return
+        self._title.configure(text=f"Обработка {index} из {total}")
+        self._file_label.configure(text=file_path.name)
+        self._status.configure(text="Файл обрабатывается...")
+        self._progress.configure(value=index - 1)
+        self._pump()
+
+    def finish_file(self, index: int, total: int, result: ConversionResult) -> None:
+        if self._closed:
+            return
+        message = f"{result.status}. Символов: {result.char_count}"
+        if result.warning:
+            message = f"{message}. Есть замечания"
+        self._status.configure(text=message)
+        self._progress.configure(value=index)
+        self._pump()
+
+    def finish(self, result_dir: Path, results: list[ConversionResult]) -> None:
+        if self._closed:
+            return
+        review_count = sum(1 for item in results if item.status != "успешно")
+        if review_count:
+            status = f"Готово. Нужно проверить файлов: {review_count}"
+        else:
+            status = "Готово. Замечаний нет."
+        self._title.configure(text="Обработка завершена")
+        self._file_label.configure(text=str(result_dir))
+        self._status.configure(text=status)
+        self._progress.configure(value=len(results))
+
+        import tkinter as tk
+        from tkinter import ttk
+
+        for child in self._button_frame.winfo_children():
+            child.destroy()
+        ttk.Button(
+            self._button_frame,
+            text="Открыть результат",
+            command=lambda: open_result_folder(result_dir),
+        ).pack(side=tk.LEFT)
+        ttk.Button(self._button_frame, text="Закрыть", command=self._root.destroy).pack(side=tk.RIGHT)
+        self._pump()
+        self._root.mainloop()
+
+    def _close(self) -> None:
+        self._closed = True
+        try:
+            self._root.destroy()
+        except Exception:
+            pass
+
+    def _pump(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._root.update_idletasks()
+            self._root.update()
+        except Exception:
+            self._closed = True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Local PDF/DOCX to Markdown converter")
     parser.add_argument("folder", nargs="?", help="Folder with PDF/DOCX files")
     parser.add_argument("--check", action="store_true", help="Check local environment only")
     parser.add_argument("--open-result", action="store_true", help="Open result folder when finished")
+    parser.add_argument(
+        "--ocr-languages",
+        type=parse_ocr_languages,
+        default="rus+eng",
+        help="Tesseract OCR languages, for example rus+eng, eng, or rus+eng+osd",
+    )
+    parser.add_argument(
+        "--ocr-workers",
+        type=parse_worker_count,
+        default=MAX_OCR_WORKERS,
+        help=f"Maximum parallel OCR pages, 1-{MAX_OCR_WORKERS} (default: {MAX_OCR_WORKERS})",
+    )
+    parser.add_argument(
+        "--quality-mode",
+        choices=sorted(QUALITY_MODES),
+        default="max",
+        help="OCR quality mode: max is slower and more accurate, standard is faster",
+    )
+    parser.add_argument(
+        "--no-progress-window",
+        action="store_true",
+        help="Do not show the small Windows progress window for interactive runs",
+    )
+    parser.add_argument(
+        "--tesseract-path",
+        type=Path,
+        help="Advanced: path to tesseract.exe for OCR testing or benchmarking",
+    )
+    parser.add_argument(
+        "--tessdata-dir",
+        type=Path,
+        help="Advanced: path to Tesseract tessdata folder for OCR testing or benchmarking",
+    )
+    parser.add_argument(
+        "--preserve-page-breaks",
+        action="store_true",
+        help="Keep explicit page separators in generated Markdown",
+    )
     args = parser.parse_args()
 
+    settings = ConversionSettings(
+        ocr_languages=args.ocr_languages,
+        max_ocr_workers=args.ocr_workers,
+        quality_mode=args.quality_mode,
+        tesseract_path=str(args.tesseract_path.resolve()) if args.tesseract_path else None,
+        tessdata_dir=str(args.tessdata_dir.resolve()) if args.tessdata_dir else None,
+        preserve_page_breaks=args.preserve_page_breaks,
+    )
+
     if args.check:
-        print_environment_check()
+        print_environment_check(settings)
         return 0
 
+    interactive_folder_pick = args.folder is None
     source_dir = Path(args.folder).resolve() if args.folder else choose_folder()
     if not source_dir:
         print("Папка не выбрана. Работа остановлена.")
@@ -80,7 +300,7 @@ def main() -> int:
 
     started_at = dt.datetime.now()
     print(f"Папка с документами: {source_dir}")
-    print_environment_check()
+    print_environment_check(settings)
 
     result_dir = make_result_dir(source_dir)
     clean_dir = result_dir / "01_markdown"
@@ -93,14 +313,26 @@ def main() -> int:
         return 1
 
     print(f"Найдено документов: {len(files)}")
-    tesseract_info = get_tesseract_info()
+    tesseract_info = get_tesseract_info(settings)
+    print(
+        f"OCR языки: {settings.ocr_language_argument}. "
+        f"Режим качества: {settings.quality_mode}. "
+        f"Параллельных OCR-страниц: {settings.max_ocr_workers}. "
+        f"Границы страниц: {'сохраняются' if settings.preserve_page_breaks else 'обычный режим'}."
+    )
     print("Финальный Markdown создаётся безопасной очисткой без нейросетевых редакторов.")
 
     used_names: set[str] = set()
     results: list[ConversionResult] = []
+    progress = build_progress_reporter(
+        show_window=interactive_folder_pick and not args.no_progress_window,
+        settings=settings,
+    )
+    progress.start(len(files), result_dir)
 
     for index, file_path in enumerate(files, start=1):
         print(f"\n[{index}/{len(files)}] {file_path.name}")
+        progress.begin_file(index, len(files), file_path)
         output_name = unique_output_name(file_path, source_dir, used_names)
         result = process_document(
             file_path=file_path,
@@ -108,13 +340,15 @@ def main() -> int:
             clean_dir=clean_dir,
             problem_dir=problem_dir,
             tesseract_info=tesseract_info,
+            settings=settings,
         )
         results.append(result)
+        progress.finish_file(index, len(files), result)
         print(f"Результат: {result.status}. Символов: {result.char_count}. {result.warning}".strip())
 
     finished_at = dt.datetime.now()
-    write_combined_markdown_file(result_dir, clean_dir, results)
-    write_run_report_file(result_dir, source_dir, results, tesseract_info, started_at, finished_at)
+    write_combined_markdown_file(result_dir, clean_dir, results, settings)
+    write_run_report_file(result_dir, source_dir, results, tesseract_info, started_at, finished_at, settings)
     write_ocr_report_file(result_dir, results, started_at, finished_at)
     print("\nГотово.")
     print(f"Папка результата: {result_dir}")
@@ -123,7 +357,42 @@ def main() -> int:
     print(f"OCR-отчет: {result_dir / 'OCR_REPORT.txt'}")
     if args.open_result:
         open_result_folder(result_dir)
+    progress.finish(result_dir, results)
     return 0
+
+
+def parse_ocr_languages(value: str) -> tuple[str, ...]:
+    languages: list[str] = []
+    for item in re.split(r"[+,; ]+", value.strip()):
+        language = item.strip()
+        if not language:
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", language):
+            raise argparse.ArgumentTypeError(f"Unsupported OCR language name: {language}")
+        if language not in languages:
+            languages.append(language)
+    if not languages:
+        raise argparse.ArgumentTypeError("At least one OCR language is required")
+    return tuple(languages)
+
+
+def parse_worker_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("OCR worker count must be a number") from exc
+    if count < 1 or count > MAX_OCR_WORKERS:
+        raise argparse.ArgumentTypeError(f"OCR worker count must be between 1 and {MAX_OCR_WORKERS}")
+    return count
+
+
+def build_progress_reporter(show_window: bool, settings: ConversionSettings | None = None) -> ProgressReporter:
+    if not show_window:
+        return ProgressReporter()
+    try:
+        return TkProgressReporter(settings)
+    except Exception:
+        return ProgressReporter()
 
 
 def choose_folder() -> Path | None:
@@ -152,19 +421,25 @@ def open_result_folder(result_dir: Path) -> None:
         pass
 
 
-def print_environment_check() -> None:
+def print_environment_check(settings: ConversionSettings | None = None) -> None:
+    settings = settings or ConversionSettings()
     print("\nПроверка среды:")
     print(f"- Python: {sys.version.split()[0]}")
     print(f"- Docling: {package_state('docling', 'docling')}")
     print(f"- MarkItDown: {package_state('markitdown', 'markitdown')}")
     print(f"- PDFium: {package_state('pypdfium2', 'pypdfium2')}")
-    tess = get_tesseract_info()
+    tess = get_tesseract_info(settings)
     if tess["path"]:
         langs = ", ".join(tess["languages"]) if tess["languages"] else "языки не определены"
         tess_version = f", версия {tess['version']}" if tess.get("version") else ""
         print(f"- Tesseract OCR: найден{tess_version} ({langs})")
     else:
         print("- Tesseract OCR: не найден")
+    print(f"- OCR quality modes: {', '.join(sorted(QUALITY_MODES))} (default: max)")
+    if settings.tesseract_path:
+        print(f"- Tesseract override: {settings.tesseract_path}")
+    if settings.tessdata_dir:
+        print(f"- tessdata override: {settings.tessdata_dir}")
 
 
 def package_state(module_name: str, package_name: str) -> str:
@@ -200,7 +475,7 @@ def should_skip_path(item: Path, source_dir: Path) -> bool:
     for part in relative_parts:
         if part in SKIP_DIR_NAMES:
             return True
-        if part.startswith("markdown_result_") or part.startswith(".converter_"):
+        if part.startswith("markdown_result_") or part.startswith("benchmark_result_") or part.startswith(".converter_"):
             return True
     return False
 
@@ -238,7 +513,9 @@ def process_document(
     clean_dir: Path,
     problem_dir: Path,
     tesseract_info: dict,
+    settings: ConversionSettings | None = None,
 ) -> ConversionResult:
+    settings = settings or ConversionSettings()
     doc_type = detect_doc_type(file_path)
     method = ""
     warning = ""
@@ -252,7 +529,7 @@ def process_document(
     page_report: list[PageOcrEntry] = []
 
     try:
-        raw_markdown, method, page_report = convert_file(file_path, doc_type, tesseract_info)
+        raw_markdown, method, page_report = convert_file(file_path, doc_type, tesseract_info, settings)
         raw_markdown = normalize_newlines(raw_markdown).strip()
         if not raw_markdown:
             raise RuntimeError("Конвертер вернул пустой текст.")
@@ -282,9 +559,12 @@ def process_document(
     if doc_type in {"PDF-скан", "PDF смешанный"} and not tesseract_info["path"]:
         status = "требует проверки" if status == "успешно" else status
         warning = join_warning(warning, "Tesseract OCR не найден; качество сканов может быть низким.")
-    if doc_type in {"PDF-скан", "PDF смешанный"} and tesseract_info["path"] and "rus" not in tesseract_info["languages"]:
+    missing_languages = [
+        language for language in settings.ocr_languages if language not in (tesseract_info.get("languages") or [])
+    ]
+    if doc_type in {"PDF-скан", "PDF смешанный"} and tesseract_info["path"] and missing_languages:
         status = "требует проверки" if status == "успешно" else status
-        warning = join_warning(warning, "В Tesseract не найден русский язык rus.")
+        warning = join_warning(warning, f"В Tesseract не найдены языки OCR: {', '.join(missing_languages)}.")
 
     clean_path = clean_dir / output_name
 
@@ -400,7 +680,13 @@ def extract_pdfium_page_text(page) -> str:
         text_page.close()
 
 
-def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[str, str, list[PageOcrEntry]]:
+def convert_file(
+    file_path: Path,
+    doc_type: str,
+    tesseract_info: dict,
+    settings: ConversionSettings | None = None,
+) -> tuple[str, str, list[PageOcrEntry]]:
+    settings = settings or ConversionSettings()
     errors: list[str] = []
     converters: list[tuple[str, Callable[[], str | tuple[str, list[PageOcrEntry]]]]] = []
 
@@ -408,22 +694,46 @@ def convert_file(file_path: Path, doc_type: str, tesseract_info: dict) -> tuple[
         converters = [
             ("Встроенное чтение DOCX", lambda: convert_docx_direct(file_path)),
             ("MarkItDown", lambda: convert_with_markitdown(file_path)),
-            ("Docling", lambda: convert_with_docling(file_path, use_ocr=False, tesseract_info=tesseract_info)),
+            (
+                "Docling",
+                lambda: convert_with_docling(
+                    file_path,
+                    use_ocr=False,
+                    tesseract_info=tesseract_info,
+                    settings=settings,
+                ),
+            ),
         ]
     elif file_path.suffix.lower() == ".pdf":
         use_page_ocr = doc_type in {"PDF-скан", "PDF смешанный"}
         if use_page_ocr:
             converters = [
-                ("Постранично: текст+OCR", lambda: convert_pdf_page_by_page(file_path, tesseract_info)),
-                ("Docling OCR", lambda: convert_with_docling(file_path, use_ocr=True, tesseract_info=tesseract_info)),
+                ("Постранично: текст+OCR", lambda: convert_pdf_page_by_page(file_path, tesseract_info, settings)),
+                (
+                    "Docling OCR",
+                    lambda: convert_with_docling(
+                        file_path,
+                        use_ocr=True,
+                        tesseract_info=tesseract_info,
+                        settings=settings,
+                    ),
+                ),
                 ("MarkItDown", lambda: convert_with_markitdown(file_path)),
-                ("PDFium text", lambda: convert_with_pdfium_text(file_path)),
+                ("PDFium text", lambda: convert_with_pdfium_text(file_path, settings)),
             ]
         else:
             converters = [
-                ("Docling", lambda: convert_with_docling(file_path, use_ocr=False, tesseract_info=tesseract_info)),
+                (
+                    "Docling",
+                    lambda: convert_with_docling(
+                        file_path,
+                        use_ocr=False,
+                        tesseract_info=tesseract_info,
+                        settings=settings,
+                    ),
+                ),
                 ("MarkItDown", lambda: convert_with_markitdown(file_path)),
-                ("PDFium text", lambda: convert_with_pdfium_text(file_path)),
+                ("PDFium text", lambda: convert_with_pdfium_text(file_path, settings)),
             ]
     else:
         raise RuntimeError("Неподдерживаемый формат файла.")
@@ -458,9 +768,16 @@ def convert_with_markitdown(file_path: Path) -> str:
     return run_without_library_noise(run)
 
 
-def convert_with_docling(file_path: Path, use_ocr: bool, tesseract_info: dict) -> str:
+def convert_with_docling(
+    file_path: Path,
+    use_ocr: bool,
+    tesseract_info: dict,
+    settings: ConversionSettings | None = None,
+) -> str:
+    settings = settings or ConversionSettings()
+
     def run() -> str:
-        converter = build_docling_converter(use_ocr=use_ocr, tesseract_info=tesseract_info)
+        converter = build_docling_converter(use_ocr=use_ocr, tesseract_info=tesseract_info, settings=settings)
         result = converter.convert(str(file_path))
         return result.document.export_to_markdown()
 
@@ -473,12 +790,18 @@ def run_without_library_noise(action: Callable[[], str]) -> str:
             return action()
 
 
-def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str, list[PageOcrEntry]]:
+def convert_pdf_page_by_page(
+    file_path: Path,
+    tesseract_info: dict,
+    settings: ConversionSettings | None = None,
+) -> tuple[str, list[PageOcrEntry]]:
+    settings = settings or ConversionSettings()
     if not tesseract_info.get("path"):
         raise RuntimeError("Tesseract OCR не найден.")
     languages = set(tesseract_info.get("languages") or [])
-    if not {"rus", "eng"}.issubset(languages):
-        raise RuntimeError("Для OCR нужны языки rus и eng.")
+    missing_languages = [language for language in settings.ocr_languages if language not in languages]
+    if missing_languages:
+        raise RuntimeError(f"Для OCR нужны языки: {', '.join(missing_languages)}.")
 
     import pypdfium2 as pdfium
 
@@ -489,7 +812,7 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str
 
     with tempfile.TemporaryDirectory(prefix="pdf_ocr_") as temp_dir:
         temp_path = Path(temp_dir)
-        ocr_jobs: list[tuple[int, int, Path]] = []
+        ocr_jobs: list[tuple[int, int, list[tuple[int, Path]]]] = []
         with pdfium.PdfDocument(str(file_path)) as document:
             page_count = len(document)
             if page_count == 0:
@@ -499,7 +822,7 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str
                 try:
                     page_text = extract_pdfium_page_text(page)
                     if not should_ocr_pdf_page_text(page_text):
-                        pages_text.append(format_page_text(page_index, page_text))
+                        pages_text.append(format_page_text(page_index, page_text, settings.preserve_page_breaks))
                         page_report.append(
                             PageOcrEntry(
                                 page_index=page_index,
@@ -510,14 +833,11 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str
                         )
                         continue
 
-                    image_path = temp_path / f"page_{page_index:04d}.png"
-                    image = page.render(scale=3.0).to_pil()
-                    try:
-                        image.save(image_path)
-                    finally:
-                        image.close()
-                    if is_probably_blank_image(image_path):
-                        pages_text.append(format_page_text(page_index, ""))
+                    rendered_images = render_ocr_page_images(page, temp_path, page_index, settings)
+                    if not rendered_images:
+                        raise RuntimeError(f"OCR page render failed: {page_index}")
+                    if is_probably_blank_image(rendered_images[0][1]):
+                        pages_text.append(format_page_text(page_index, "", settings.preserve_page_breaks))
                         page_report.append(
                             PageOcrEntry(
                                 page_index=page_index,
@@ -527,33 +847,61 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str
                             )
                         )
                         continue
-                    preprocess_ocr_image(image_path)
-                    ocr_jobs.append((page_index, page_count, image_path))
+                    ocr_jobs.append((page_index, page_count, rendered_images))
                 finally:
                     page.close()
 
         if ocr_jobs:
-            workers = choose_ocr_worker_count(len(ocr_jobs))
+            workers = choose_ocr_worker_count(len(ocr_jobs), settings)
             print(f"  OCR страниц: {len(ocr_jobs)}. Параллельно: {workers}")
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 future_map = {
-                    executor.submit(run_tesseract_on_image, image_path, tesseract_path, tessdata_dir): page_index
-                    for page_index, _, image_path in ocr_jobs
+                    executor.submit(
+                        run_ocr_attempts_for_page,
+                        rendered_images,
+                        tesseract_path,
+                        tessdata_dir,
+                        settings,
+                        temp_path,
+                        page_index,
+                    ): page_index
+                    for page_index, _, rendered_images in ocr_jobs
                 }
-                ocr_results: dict[int, str] = {}
+                ocr_results: dict[int, tuple[str, OcrAttemptResult, int]] = {}
                 for future in concurrent.futures.as_completed(future_map):
                     page_index = future_map[future]
                     print(f"  OCR страница {page_index}/{ocr_jobs[0][1]}")
-                    ocr_results[page_index] = future.result().strip()
+                    ocr_results[page_index] = future.result()
             for page_index, _, _ in ocr_jobs:
-                page_text = ocr_results.get(page_index, "")
-                pages_text.append(format_page_text(page_index, page_text))
+                page_text, best_attempt, attempt_count = ocr_results.get(
+                    page_index,
+                    (
+                        "",
+                        OcrAttemptResult("", None, 0, 0, "", 0.0, "OCR did not return a result."),
+                        0,
+                    ),
+                )
+                pages_text.append(format_page_text(page_index, page_text, settings.preserve_page_breaks))
+                warning = assess_page_text_warning(
+                    page_text,
+                    source="ocr",
+                    confidence=best_attempt.confidence,
+                    require_confidence=settings.quality_mode == "max",
+                )
+                if best_attempt.warning:
+                    warning = " ".join(part for part in [warning, best_attempt.warning] if part)
                 page_report.append(
                     PageOcrEntry(
                         page_index=page_index,
                         source="ocr",
                         char_count=len(page_text.strip()),
-                        warning=assess_page_text_warning(page_text, source="ocr"),
+                        warning=warning,
+                        confidence=best_attempt.confidence,
+                        psm=best_attempt.psm or None,
+                        dpi=best_attempt.dpi or None,
+                        variant=best_attempt.variant,
+                        attempt_count=attempt_count,
+                        selected_reason=build_selected_ocr_reason(best_attempt, attempt_count),
                     )
                 )
 
@@ -565,6 +913,80 @@ def convert_pdf_page_by_page(file_path: Path, tesseract_info: dict) -> tuple[str
     return result, page_report
 
 
+def render_ocr_page_images(page, temp_path: Path, page_index: int, settings: ConversionSettings) -> list[tuple[int, Path]]:
+    rendered: list[tuple[int, Path]] = []
+    for dpi in settings.ocr_dpi_values:
+        image_path = temp_path / f"page_{page_index:04d}_{dpi}dpi.png"
+        try:
+            render_pdf_page_image(page, image_path, dpi)
+            rendered.append((dpi, image_path))
+        except Exception:
+            continue
+    return rendered
+
+
+def render_pdf_page_image(page, image_path: Path, dpi: int) -> None:
+    scale = max(1.0, dpi / 72.0)
+    image = page.render(scale=scale).to_pil()
+    try:
+        image.save(image_path)
+    finally:
+        image.close()
+
+
+def run_ocr_attempts_for_page(
+    rendered_images: list[tuple[int, Path]],
+    tesseract_path: str,
+    tessdata_dir: str | None,
+    settings: ConversionSettings,
+    temp_path: Path,
+    page_index: int,
+) -> tuple[str, OcrAttemptResult, int]:
+    best: OcrAttemptResult | None = None
+    attempt_count = 0
+
+    for dpi, base_image_path in rendered_images:
+        for variant in settings.ocr_variants:
+            variant_path = temp_path / f"page_{page_index:04d}_{dpi}dpi_{variant}.png"
+            create_ocr_image_variant(base_image_path, variant_path, variant)
+            for psm in settings.ocr_psm_values:
+                attempt_count += 1
+                if settings.quality_mode == "max":
+                    attempt = run_tesseract_tsv_on_image(variant_path, tesseract_path, tessdata_dir, settings, psm, dpi, variant)
+                else:
+                    text = run_tesseract_on_image(variant_path, tesseract_path, tessdata_dir, settings, psm=psm)
+                    attempt = build_ocr_attempt_result(text, None, psm, dpi, variant)
+                if best is None or attempt.score > best.score:
+                    best = attempt
+                if is_high_confidence_ocr_attempt(attempt):
+                    return attempt.text.strip(), attempt, attempt_count
+
+    if best is None:
+        best = OcrAttemptResult("", None, 0, 0, "", 0.0, "OCR did not produce attempts.")
+    return best.text.strip(), best, attempt_count
+
+
+def create_ocr_image_variant(source_path: Path, output_path: Path, variant: str) -> None:
+    from PIL import Image, ImageFilter, ImageOps
+
+    configure_pillow_for_ocr(Image)
+    with Image.open(source_path) as image:
+        processed = ImageOps.grayscale(image)
+        if variant == "gray":
+            processed.save(output_path)
+            return
+        processed = ImageOps.autocontrast(processed, cutoff=1)
+        if variant == "contrast_sharp":
+            processed = processed.filter(ImageFilter.SHARPEN)
+            processed.save(output_path)
+            return
+        if variant == "binary":
+            processed = processed.point(lambda value: 255 if value > 180 else 0, mode="1")
+            processed.save(output_path)
+            return
+        processed.save(output_path)
+
+
 def should_ocr_pdf_page_text(page_text: str) -> bool:
     text = normalize_newlines(page_text).strip()
     if len(text) < PDF_TEXT_LAYER_THRESHOLD:
@@ -572,13 +994,23 @@ def should_ocr_pdf_page_text(page_text: str) -> bool:
     return looks_like_bad_pdf_text_layer(text)
 
 
-def assess_page_text_warning(page_text: str, source: str) -> str:
+def assess_page_text_warning(
+    page_text: str,
+    source: str,
+    confidence: float | None = None,
+    require_confidence: bool = False,
+) -> str:
     text = normalize_newlines(page_text).strip()
     warnings: list[str] = []
     if not text:
         warnings.append("Текст не извлечен.")
     elif len(text) < PDF_TEXT_LAYER_THRESHOLD:
         warnings.append("Мало текста.")
+
+    if source == "ocr" and require_confidence and text and confidence is None:
+        warnings.append("Уверенность OCR не получена.")
+    elif confidence is not None and confidence < OCR_CONFIDENCE_REVIEW_THRESHOLD:
+        warnings.append(f"Низкая уверенность OCR: {confidence:.1f}.")
 
     replacement_count = text.count("\uFFFD")
     if replacement_count:
@@ -633,9 +1065,10 @@ def is_probably_blank_image(image_path: Path) -> bool:
         return False
 
 
-def choose_ocr_worker_count(job_count: int) -> int:
+def choose_ocr_worker_count(job_count: int, settings: ConversionSettings | None = None) -> int:
+    settings = settings or ConversionSettings()
     cpu_count = os.cpu_count() or 2
-    return max(1, min(MAX_OCR_WORKERS, job_count, max(1, cpu_count // 2)))
+    return max(1, min(settings.max_ocr_workers, job_count, max(1, cpu_count // 2)))
 
 
 def preprocess_ocr_image(image_path: Path) -> None:
@@ -652,11 +1085,18 @@ def preprocess_ocr_image(image_path: Path) -> None:
         pass
 
 
-def run_tesseract_on_image(image_path: Path, tesseract_path: str, tessdata_dir: str | None) -> str:
+def run_tesseract_on_image(
+    image_path: Path,
+    tesseract_path: str,
+    tessdata_dir: str | None,
+    settings: ConversionSettings | None = None,
+    psm: int = 6,
+) -> str:
+    settings = settings or ConversionSettings()
     command = [tesseract_path, str(image_path), "stdout"]
     if tessdata_dir:
         command.extend(["--tessdata-dir", tessdata_dir])
-    command.extend(["-l", "rus+eng", "--psm", "6"])
+    command.extend(["-l", settings.ocr_language_argument, "--psm", str(psm)])
     completed = subprocess.run(
         command,
         capture_output=True,
@@ -670,16 +1110,157 @@ def run_tesseract_on_image(image_path: Path, tesseract_path: str, tessdata_dir: 
     return completed.stdout
 
 
-def format_page_text(page_index: int, page_text: str) -> str:
-    return f"## Страница {page_index}\n\n{page_text.strip()}".strip()
+def run_tesseract_tsv_on_image(
+    image_path: Path,
+    tesseract_path: str,
+    tessdata_dir: str | None,
+    settings: ConversionSettings,
+    psm: int,
+    dpi: int,
+    variant: str,
+) -> OcrAttemptResult:
+    command = [tesseract_path, str(image_path), "stdout"]
+    if tessdata_dir:
+        command.extend(["--tessdata-dir", tessdata_dir])
+    command.extend(["-l", settings.ocr_language_argument, "--psm", str(psm), "-c", "tessedit_create_tsv=1"])
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+    )
+    if completed.returncode != 0:
+        return OcrAttemptResult("", None, psm, dpi, variant, 0.0, completed.stderr.strip())
+    text, confidence = parse_tesseract_tsv(completed.stdout)
+    if not text.strip():
+        try:
+            text = run_tesseract_on_image(image_path, tesseract_path, tessdata_dir, settings, psm=psm)
+        except Exception as exc:
+            return OcrAttemptResult("", confidence, psm, dpi, variant, 0.0, str(exc))
+    return build_ocr_attempt_result(text, confidence, psm, dpi, variant)
+
+
+def parse_tesseract_tsv(tsv_text: str) -> tuple[str, float | None]:
+    lines = [line for line in normalize_newlines(tsv_text).split("\n") if line.strip()]
+    if not lines:
+        return "", None
+    headers = lines[0].split("\t")
+    index = {name: position for position, name in enumerate(headers)}
+    required = {"block_num", "par_num", "line_num", "conf", "text"}
+    if not required.issubset(index):
+        return "", None
+
+    line_words: dict[tuple[str, str, str], list[str]] = {}
+    line_order: list[tuple[str, str, str]] = []
+    confidences: list[float] = []
+
+    for raw_line in lines[1:]:
+        columns = raw_line.split("\t")
+        if len(columns) <= index["text"]:
+            continue
+        word = columns[index["text"]].strip()
+        if not word:
+            continue
+        conf_value = parse_tesseract_confidence(columns[index["conf"]])
+        if conf_value is not None:
+            confidences.append(conf_value)
+        key = (
+            columns[index["block_num"]],
+            columns[index["par_num"]],
+            columns[index["line_num"]],
+        )
+        if key not in line_words:
+            line_words[key] = []
+            line_order.append(key)
+        line_words[key].append(word)
+
+    text_lines = [" ".join(line_words[key]).strip() for key in line_order if line_words[key]]
+    confidence = round(sum(confidences) / len(confidences), 1) if confidences else None
+    return "\n".join(text_lines).strip(), confidence
+
+
+def parse_tesseract_confidence(value: str) -> float | None:
+    try:
+        confidence = float(value)
+    except ValueError:
+        return None
+    if confidence < 0:
+        return None
+    return confidence
+
+
+def build_ocr_attempt_result(
+    text: str,
+    confidence: float | None,
+    psm: int,
+    dpi: int,
+    variant: str,
+) -> OcrAttemptResult:
+    normalized = normalize_newlines(text).strip()
+    score = score_ocr_attempt(normalized, confidence)
+    return OcrAttemptResult(normalized, confidence, psm, dpi, variant, score)
+
+
+def score_ocr_attempt(text: str, confidence: float | None) -> float:
+    normalized = normalize_newlines(text).strip()
+    if not normalized:
+        return 0.0
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", normalized)
+    cyrillic = re.findall(r"[А-Яа-яЁё]", normalized)
+    words = re.findall(r"[A-Za-zА-Яа-яЁё]{2,}", normalized)
+    replacement_count = normalized.count("\uFFFD")
+    single_tokens = re.findall(
+        r"(?<![A-Za-zА-Яа-яЁё])[A-Za-zА-Яа-яЁё](?![A-Za-zА-Яа-яЁё])",
+        normalized,
+    )
+    cyrillic_ratio = len(cyrillic) / len(letters) if letters else 0.0
+    single_token_ratio = len(single_tokens) / max(1, len(words) + len(single_tokens))
+
+    score = min(len(normalized), 2500) * 0.03
+    score += len(words) * 0.8
+    score += (confidence or 0.0) * 2.0
+    score += cyrillic_ratio * 35.0
+    score -= replacement_count * 8.0
+    score -= single_token_ratio * 40.0
+    return round(score, 3)
+
+
+def is_high_confidence_ocr_attempt(attempt: OcrAttemptResult) -> bool:
+    if attempt.confidence is None:
+        return False
+    if attempt.confidence < OCR_EARLY_STOP_CONFIDENCE:
+        return False
+    return len(attempt.text.strip()) >= LOW_TEXT_THRESHOLD
+
+
+def build_selected_ocr_reason(attempt: OcrAttemptResult, attempt_count: int) -> str:
+    confidence = "нет" if attempt.confidence is None else f"{attempt.confidence:.1f}"
+    return (
+        f"score={attempt.score:.1f}; confidence={confidence}; "
+        f"dpi={attempt.dpi}; psm={attempt.psm}; variant={attempt.variant}; attempts={attempt_count}"
+    )
+
+
+def format_page_text(page_index: int, page_text: str, preserve_page_breaks: bool = False) -> str:
+    heading = f"## Страница {page_index}"
+    if preserve_page_breaks:
+        heading = f"---\n\n{heading}"
+    return f"{heading}\n\n{page_text.strip()}".strip()
 
 
 def page_number_from_markdown(page_text: str) -> int:
-    match = re.match(r"## Страница (\d+)", page_text)
+    match = re.search(r"## Страница (\d+)", page_text)
     return int(match.group(1)) if match else 0
 
 
-def build_docling_converter(use_ocr: bool, tesseract_info: dict):
+def build_docling_converter(
+    use_ocr: bool,
+    tesseract_info: dict,
+    settings: ConversionSettings | None = None,
+):
+    settings = settings or ConversionSettings()
     from docling.document_converter import DocumentConverter
 
     if not use_ocr:
@@ -692,7 +1273,7 @@ def build_docling_converter(use_ocr: bool, tesseract_info: dict):
         options = PdfPipelineOptions()
         options.do_ocr = True
         options.ocr_options = TesseractCliOcrOptions(
-            lang=["rus", "eng"],
+            lang=list(settings.ocr_languages),
             force_full_page_ocr=True,
             tesseract_cmd=tesseract_info.get("path") or "tesseract",
             path=tesseract_info.get("tessdata_dir"),
@@ -703,7 +1284,8 @@ def build_docling_converter(use_ocr: bool, tesseract_info: dict):
         return DocumentConverter()
 
 
-def convert_with_pdfium_text(file_path: Path) -> str:
+def convert_with_pdfium_text(file_path: Path, settings: ConversionSettings | None = None) -> str:
+    settings = settings or ConversionSettings()
     import pypdfium2 as pdfium
 
     pages: list[str] = []
@@ -713,7 +1295,7 @@ def convert_with_pdfium_text(file_path: Path) -> str:
             try:
                 text = extract_pdfium_page_text(page)
                 if text:
-                    pages.append(f"## Страница {page_index}\n\n{text}")
+                    pages.append(format_page_text(page_index, text, settings.preserve_page_breaks))
             finally:
                 page.close()
     return "\n\n".join(pages)
@@ -914,10 +1496,15 @@ def should_join_lines(left: str, right: str) -> bool:
     return True
 
 
-def get_tesseract_info() -> dict:
+def get_tesseract_info(settings: ConversionSettings | None = None) -> dict:
+    settings = settings or ConversionSettings()
     bundled_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     bundled_tesseract = bundled_dir / "tesseract.exe"
-    path = str(bundled_tesseract) if bundled_tesseract.exists() else shutil.which("tesseract")
+    path = settings.tesseract_path
+    if path and not Path(path).exists():
+        path = None
+    if not path:
+        path = str(bundled_tesseract) if bundled_tesseract.exists() else shutil.which("tesseract")
     if not path:
         common_paths = [
             Path("C:/Program Files/Tesseract-OCR/tesseract.exe"),
@@ -927,7 +1514,9 @@ def get_tesseract_info() -> dict:
             if candidate.exists():
                 path = str(candidate)
                 break
-    tessdata_path = find_tessdata_dir(bundled_dir)
+    tessdata_path = Path(settings.tessdata_dir) if settings.tessdata_dir else find_tessdata_dir(bundled_dir)
+    if tessdata_path and not tessdata_path.exists():
+        tessdata_path = None
     tessdata_dir = str(tessdata_path) if tessdata_path else None
     languages: list[str] = []
     tesseract_version = ""
@@ -1005,7 +1594,13 @@ def build_problem_note(source: Path, doc_type: str, method: str, status: str, wa
     )
 
 
-def write_combined_markdown_file(result_dir: Path, clean_dir: Path, results: list[ConversionResult]) -> None:
+def write_combined_markdown_file(
+    result_dir: Path,
+    clean_dir: Path,
+    results: list[ConversionResult],
+    settings: ConversionSettings | None = None,
+) -> None:
+    settings = settings or ConversionSettings()
     lines = [
         "# Все документы",
         "",
@@ -1027,6 +1622,7 @@ def write_combined_markdown_file(result_dir: Path, clean_dir: Path, results: lis
                 f"- Статус: {item.status}",
                 f"- Качество: {item.quality_status}",
                 f"- Исходный файл: `{item.source}`",
+                f"- Границы страниц: {'сохранены' if settings.preserve_page_breaks else 'обычный режим'}",
                 "",
                 body,
             ]
@@ -1041,7 +1637,9 @@ def write_run_report_file(
     tesseract_info: dict,
     started_at: dt.datetime,
     finished_at: dt.datetime,
+    settings: ConversionSettings | None = None,
 ) -> None:
+    settings = settings or ConversionSettings()
     success_count = sum(1 for item in results if item.status == "успешно")
     review_count = sum(1 for item in results if item.status == "требует проверки")
     error_count = sum(1 for item in results if item.status == "ошибка")
@@ -1051,6 +1649,8 @@ def write_run_report_file(
     total_text_pages = sum(item.text_page_count for item in results)
     total_blank_pages = sum(item.blank_page_count for item in results)
     total_page_warnings = sum(1 for item in results for page in item.page_report if page.warning)
+    confidence_values = [page.confidence for item in results for page in item.page_report if page.confidence is not None]
+    average_confidence = round(sum(confidence_values) / len(confidence_values), 1) if confidence_values else None
 
     tesseract_status = "не найден"
     if tesseract_info.get("path"):
@@ -1078,6 +1678,13 @@ def write_run_report_file(
         f"- страниц с замечаниями OCR: {total_page_warnings}",
         f"- символов извлечено: {total_chars}",
         f"- Tesseract OCR: {tesseract_status}",
+        f"- Tesseract path: {tesseract_info.get('path') or 'не найден'}",
+        f"- tessdata: {tesseract_info.get('tessdata_dir') or 'не определено'}",
+        f"- OCR языки: {settings.ocr_language_argument}",
+        f"- режим качества OCR: {settings.quality_mode}",
+        f"- максимум параллельных OCR-страниц: {settings.max_ocr_workers}",
+        f"- границы страниц в Markdown: {'сохраняются' if settings.preserve_page_breaks else 'обычный режим'}",
+        f"- средняя уверенность OCR: {format_optional_float(average_confidence)}",
         "",
         "Файлы:",
     ]
@@ -1095,6 +1702,7 @@ def write_run_report_file(
                 f"   Текстовый слой: {item.text_page_count}",
                 f"   Пустые страницы: {item.blank_page_count}",
                 f"   Страниц с замечаниями OCR: {sum(1 for page in item.page_report if page.warning)}",
+                f"   Средняя уверенность OCR: {format_optional_float(average_page_confidence(item.page_report))}",
                 f"   Символов: {item.char_count}",
                 f"   Качество: {item.quality_status}",
                 f"   Предупреждение: {item.warning or 'нет'}",
@@ -1126,6 +1734,15 @@ def write_ocr_report_file(
         (result_dir / "OCR_REPORT.txt").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
         return
 
+    pages_to_review = [(item, page) for item in page_level_results for page in item.page_report if page.warning]
+    lines.append("Страницы для ручной проверки:")
+    if pages_to_review:
+        for item, page in pages_to_review:
+            lines.append(f"- {item.source.name}, стр. {page.page_index}: {page.warning}")
+    else:
+        lines.append("- нет")
+    lines.append("")
+
     for item in page_level_results:
         lines.extend(
             [
@@ -1142,9 +1759,10 @@ def write_ocr_report_file(
         )
         for page in item.page_report:
             warning = page.warning or "нет"
+            details = format_page_ocr_details(page)
             lines.append(
                 f"- стр. {page.page_index}: {format_page_source(page.source)}, "
-                f"символов: {page.char_count}, замечание: {warning}"
+                f"символов: {page.char_count}, {details}, замечание: {warning}"
             )
         lines.append("")
 
@@ -1165,6 +1783,30 @@ def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:
 
 def format_optional_int(value: int | None) -> str:
     return str(value) if value is not None else "не определено"
+
+
+def format_optional_float(value: float | None) -> str:
+    return f"{value:.1f}" if value is not None else "нет данных"
+
+
+def average_page_confidence(page_report: list[PageOcrEntry]) -> float | None:
+    values = [page.confidence for page in page_report if page.confidence is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 1)
+
+
+def format_page_ocr_details(page: PageOcrEntry) -> str:
+    if page.source != "ocr":
+        return "OCR детали: нет"
+    return (
+        f"уверенность: {format_optional_float(page.confidence)}, "
+        f"dpi: {format_optional_int(page.dpi)}, "
+        f"psm: {format_optional_int(page.psm)}, "
+        f"вариант: {page.variant or 'нет'}, "
+        f"попыток: {page.attempt_count}, "
+        f"выбор: {page.selected_reason or 'нет'}"
+    )
 
 
 def format_page_source(source: str) -> str:

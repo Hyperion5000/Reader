@@ -20,15 +20,10 @@ class RepositoryHygieneTests(unittest.TestCase):
             "CODE_OF_CONDUCT.md",
             "THIRD_PARTY_NOTICES.md",
             "ROADMAP.md",
-            "docs/AI_ASSISTED_MAINTENANCE.md",
-            "docs/CODEX_FOR_OSS_APPLICATION_CHECKLIST.md",
+            "benchmarks/README.md",
+            "benchmarks/run_ocr_benchmark.py",
             "docs/FAQ.md",
-            "docs/GITHUB_RELEASE_DRAFT_v0.4.1.md",
-            "docs/ISSUE_DRAFTS.md",
-            "docs/OPENAI_CODEX_OSS_APPLICATION_DRAFT.md",
-            "docs/RELEASE_NOTES_v0.4.1.md",
             "docs/RELEASE_PROCESS.md",
-            "docs/TRIAGE_PLAN.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
             ".github/dependabot.yml",
             ".github/workflows/ci.yml",
@@ -53,6 +48,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             "runtime/",
             "release/",
             "markdown_result_",
+            "benchmark_result_",
         ]
         forbidden_suffixes = (".pdf", ".doc", ".docx")
 
@@ -70,7 +66,6 @@ class RepositoryHygieneTests(unittest.TestCase):
 
         self.assertIn("https://github.com/Hyperion5000/Reader/releases", readme)
         self.assertIn("Reader does not upload documents to the internet", readme)
-        self.assertIn("docs/AI_ASSISTED_MAINTENANCE.md", readme)
         self.assertIn("docs/RELEASE_PROCESS.md", readme)
 
 

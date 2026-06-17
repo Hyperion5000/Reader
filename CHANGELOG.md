@@ -2,6 +2,20 @@
 
 All notable changes to Reader are documented here.
 
+## Unreleased
+
+- Added `--quality-mode max|standard`; `max` is now the default OCR mode for better scan quality.
+- Added multi-attempt OCR in max mode with multiple DPI values, image preprocessing variants, and Tesseract PSM modes.
+- Added Tesseract TSV confidence scoring and best-attempt selection for OCR pages.
+- Fixed TSV confidence collection when Reader uses bundled local Tesseract language data.
+- OCR pages without a measurable confidence value are now marked for manual review in max quality mode.
+- Added a synthetic OCR benchmark for comparing `standard` and `max` quality modes.
+- Expanded the benchmark with Russian OCR reporting, harder synthetic scans, and Tesseract override options.
+- Added `--tesseract-path`, `--tessdata-dir`, and `--preserve-page-breaks` for advanced testing workflows.
+- Added OCR language and speed settings through command-line options.
+- Added a small Windows progress window for interactive folder-picker runs.
+- Added a manual-review summary at the top of `OCR_REPORT.txt`.
+
 ## 0.4.3 - High-resolution scan handling
 
 - Raised the local OCR image safety limit so normal high-resolution scanned pages no longer print Pillow decompression-bomb warnings during processing.

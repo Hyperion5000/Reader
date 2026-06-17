@@ -30,12 +30,13 @@ Reader is useful for:
 5. Open the generated `markdown_result_...` folder.
 
 The main output file is `00_ALL_DOCUMENTS.md`.
+When Reader is started without a folder argument, it shows a small Windows progress window during processing.
 
 ## Output Structure
 
 - `00_ALL_DOCUMENTS.md` - one combined Markdown file with all processed documents.
 - `REPORT.txt` - short processing summary: files, status, OCR pages, warnings, and errors.
-- `OCR_REPORT.txt` - page-level PDF OCR report for scanned and mixed PDFs.
+- `OCR_REPORT.txt` - page-level PDF OCR report for scanned and mixed PDFs, including a short list of pages that need manual review.
 - `01_markdown` - separate Markdown files for each document.
 - `02_problem_files` - created only when a file needs manual review.
 
@@ -62,6 +63,27 @@ PDFs are processed page by page:
 - nearly blank pages are filtered before OCR;
 - high-resolution scanned pages are allowed within a controlled OCR image limit;
 - multiple OCR pages are processed in parallel.
+
+Reader has two OCR quality modes:
+
+- `max` - default mode. It is slower, but tries multiple DPI values, image cleanup variants, and Tesseract page segmentation modes, then chooses the best result using confidence scoring.
+- `standard` - faster mode close to the earlier single-pass OCR behavior.
+
+Advanced users can change OCR behavior from the command line:
+
+```powershell
+Reader_Portable.exe "C:\Documents" --quality-mode max --ocr-languages rus+eng --ocr-workers 2
+```
+
+`--quality-mode` controls the speed/quality tradeoff. `--ocr-languages` controls the Tesseract languages used for scanned pages. `--ocr-workers` controls how many OCR pages may run in parallel, up to the built-in safe limit.
+
+Advanced testing options:
+
+- `--preserve-page-breaks` keeps explicit page separators in Markdown.
+- `--tesseract-path` points Reader to a specific `tesseract.exe`.
+- `--tessdata-dir` points Reader to a specific Tesseract language-data folder.
+
+`OCR_REPORT.txt` includes the selected OCR attempt details for each OCR page: confidence, DPI, PSM mode, image variant, and number of attempts.
 
 ## Example Result
 
@@ -112,6 +134,12 @@ Environment check:
 python src\reader\markdown_converter.py --check
 ```
 
+Example with custom OCR settings:
+
+```powershell
+python src\reader\markdown_converter.py "C:\Documents" --quality-mode max --ocr-languages rus+eng --ocr-workers 2
+```
+
 ## Build Portable EXE
 
 Build on Windows:
@@ -133,6 +161,7 @@ The portable exe is not stored in Git. Public binaries should be published throu
 - `src/reader/markdown_converter.py` - main application code.
 - `config/requirements.txt` - source runtime dependencies.
 - `config/build-requirements.txt` - portable exe build dependencies.
+- `benchmarks/` - synthetic OCR benchmark for comparing `standard` and `max` quality modes.
 - `scripts/` - launch, environment check, OCR setup, build, and release checksum scripts.
 - `tests/` - automated tests.
 - `docs/` - project documentation.
@@ -149,9 +178,25 @@ python -m unittest discover -s tests
 
 CI runs these checks automatically when GitHub Actions is available.
 
+## OCR Benchmark
+
+Run the synthetic benchmark when OCR behavior changes:
+
+```powershell
+runtime\.venv\Scripts\python.exe benchmarks\run_ocr_benchmark.py
+```
+
+The benchmark creates local synthetic PDF/DOCX files, runs Reader in `standard` and `max` modes, and writes `BENCHMARK_REPORT.md` inside a local `benchmark_result_...` folder.
+
+The benchmark also reports whether `max` is not worse than `standard` and whether the synthetic Russian OCR check passed. To compare a different Tesseract build:
+
+```powershell
+runtime\.venv\Scripts\python.exe benchmarks\run_ocr_benchmark.py --label tesseract-5.5 --tesseract-path "C:\Path\to\tesseract.exe" --tessdata-dir "C:\Path\to\tessdata"
+```
+
 ## Privacy
 
-Reader does not upload documents to the internet. Source PDFs/DOCX files, generated `markdown_result_...` folders, OCR data, `runtime/`, and `.exe` files are excluded from Git.
+Reader does not upload documents to the internet. Source PDFs/DOCX files, generated `markdown_result_...` folders, benchmark result folders, OCR data, `runtime/`, and `.exe` files are excluded from Git.
 
 Do not attach real private documents to public GitHub issues. Use anonymized or synthetic examples.
 
@@ -165,9 +210,6 @@ Do not attach real private documents to public GitHub issues. Use anonymized or 
 - Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - Release process: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
 - Roadmap: [ROADMAP.md](ROADMAP.md).
-- Triage: [docs/TRIAGE_PLAN.md](docs/TRIAGE_PLAN.md).
-- Issue drafts: [docs/ISSUE_DRAFTS.md](docs/ISSUE_DRAFTS.md).
-- AI-assisted maintenance: [docs/AI_ASSISTED_MAINTENANCE.md](docs/AI_ASSISTED_MAINTENANCE.md).
 - FAQ: [docs/FAQ.md](docs/FAQ.md).
 
 ## Tooling Status

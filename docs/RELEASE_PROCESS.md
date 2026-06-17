@@ -39,7 +39,7 @@ git push origin v0.4.1
 
 1. Open GitHub Releases.
 2. Create a release from the version tag.
-3. Use the release notes from `docs/RELEASE_NOTES_v0.4.1.md`.
+3. Use the current release notes from `CHANGELOG.md`.
 4. Create a checksum:
 
 ```powershell

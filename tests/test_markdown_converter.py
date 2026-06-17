@@ -65,12 +65,13 @@ class ReaderConversionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             result_dir = root / "markdown_result_new"
-            for folder in ["runtime", "build", "dist", "markdown_result_old", "docs"]:
+            for folder in ["runtime", "build", "dist", "markdown_result_old", "benchmark_result_old", "docs"]:
                 (root / folder).mkdir()
             (root / "runtime" / "hidden.pdf").write_text("x", encoding="utf-8")
             (root / "build" / "hidden.pdf").write_text("x", encoding="utf-8")
             (root / "dist" / "hidden.pdf").write_text("x", encoding="utf-8")
             (root / "markdown_result_old" / "hidden.pdf").write_text("x", encoding="utf-8")
+            (root / "benchmark_result_old" / "hidden.pdf").write_text("x", encoding="utf-8")
             (root / "docs" / "visible.pdf").write_text("x", encoding="utf-8")
             (root / "visible.docx").write_text("x", encoding="utf-8")
 
@@ -115,6 +116,146 @@ class ReaderConversionTests(unittest.TestCase):
         converter.configure_pillow_for_ocr(DummyImageModule)
 
         self.assertEqual(DummyImageModule.MAX_IMAGE_PIXELS, converter.PIL_MAX_OCR_IMAGE_PIXELS)
+
+    def test_parse_ocr_languages_accepts_common_separators(self) -> None:
+        self.assertEqual(converter.parse_ocr_languages("rus+eng,osd"), ("rus", "eng", "osd"))
+        self.assertEqual(converter.parse_ocr_languages("eng eng"), ("eng",))
+
+    def test_run_tesseract_uses_selected_languages(self) -> None:
+        calls = []
+        original_run = converter.subprocess.run
+
+        class Completed:
+            returncode = 0
+            stdout = "recognized text"
+            stderr = ""
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            return Completed()
+
+        try:
+            converter.subprocess.run = fake_run
+            result = converter.run_tesseract_on_image(
+                Path("page.png"),
+                "tesseract.exe",
+                None,
+                converter.ConversionSettings(ocr_languages=("eng",), max_ocr_workers=1),
+            )
+        finally:
+            converter.subprocess.run = original_run
+
+        self.assertEqual(result, "recognized text")
+        self.assertIn("-l", calls[0])
+        self.assertIn("eng", calls[0])
+
+    def test_get_tesseract_info_accepts_advanced_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            tesseract_path = root / "tesseract.exe"
+            tessdata_dir = root / "tessdata"
+            tesseract_path.write_text("", encoding="utf-8")
+            tessdata_dir.mkdir()
+
+            info = converter.get_tesseract_info(
+                converter.ConversionSettings(
+                    tesseract_path=str(tesseract_path),
+                    tessdata_dir=str(tessdata_dir),
+                )
+            )
+
+        self.assertEqual(info["path"], str(tesseract_path))
+        self.assertEqual(info["tessdata_dir"], str(tessdata_dir))
+
+    def test_run_tesseract_tsv_uses_inline_tsv_config(self) -> None:
+        calls = []
+        original_run = converter.subprocess.run
+
+        class Completed:
+            returncode = 0
+            stdout = "\n".join(
+                [
+                    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+                    "5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t95.0\tReader",
+                ]
+            )
+            stderr = ""
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            return Completed()
+
+        try:
+            converter.subprocess.run = fake_run
+            result = converter.run_tesseract_tsv_on_image(
+                Path("page.png"),
+                "tesseract.exe",
+                "runtime/tessdata",
+                converter.ConversionSettings(ocr_languages=("eng",), max_ocr_workers=1),
+                psm=6,
+                dpi=300,
+                variant="gray",
+            )
+        finally:
+            converter.subprocess.run = original_run
+
+        self.assertEqual(result.text, "Reader")
+        self.assertEqual(result.confidence, 95.0)
+        self.assertIn("-c", calls[0])
+        self.assertIn("tessedit_create_tsv=1", calls[0])
+        self.assertNotIn("tsv", calls[0])
+
+    def test_choose_ocr_worker_count_respects_settings(self) -> None:
+        settings = converter.ConversionSettings(ocr_languages=("rus", "eng"), max_ocr_workers=1)
+        self.assertEqual(converter.choose_ocr_worker_count(10, settings), 1)
+
+    def test_quality_mode_controls_ocr_attempt_matrix(self) -> None:
+        standard = converter.ConversionSettings(quality_mode="standard")
+        maximum = converter.ConversionSettings(quality_mode="max")
+
+        self.assertEqual(standard.ocr_dpi_values, (converter.STANDARD_OCR_DPI,))
+        self.assertEqual(standard.ocr_psm_values, converter.STANDARD_OCR_PSM_VALUES)
+        self.assertGreater(len(maximum.ocr_dpi_values), len(standard.ocr_dpi_values))
+        self.assertGreater(len(maximum.ocr_psm_values), len(standard.ocr_psm_values))
+
+    def test_format_page_text_can_preserve_page_breaks(self) -> None:
+        text = converter.format_page_text(2, "Page body", preserve_page_breaks=True)
+
+        self.assertTrue(text.startswith("---\n\n## Страница 2"))
+        self.assertEqual(converter.page_number_from_markdown(text), 2)
+
+    def test_parse_tesseract_tsv_extracts_text_and_confidence(self) -> None:
+        tsv = "\n".join(
+            [
+                "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+                "5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t90.0\tHello",
+                "5\t1\t1\t1\t1\t2\t12\t0\t10\t10\t80.0\tworld",
+                "5\t1\t1\t1\t2\t1\t0\t20\t10\t10\t70.0\tAgain",
+            ]
+        )
+
+        text, confidence = converter.parse_tesseract_tsv(tsv)
+
+        self.assertEqual(text, "Hello world\nAgain")
+        self.assertEqual(confidence, 80.0)
+
+    def test_score_prefers_higher_confidence_clean_text(self) -> None:
+        good = converter.build_ocr_attempt_result("Normal readable text " * 30, 90.0, 6, 300, "gray")
+        weak = converter.build_ocr_attempt_result("N o r m a l r e a d a b l e t e x t", 30.0, 11, 216, "binary")
+
+        self.assertGreater(good.score, weak.score)
+        self.assertTrue(converter.is_high_confidence_ocr_attempt(good))
+        self.assertFalse(converter.is_high_confidence_ocr_attempt(weak))
+
+    def test_max_quality_warns_when_ocr_confidence_is_missing(self) -> None:
+        warning = converter.assess_page_text_warning(
+            "Readable OCR text with enough words for a confidence check.",
+            source="ocr",
+            confidence=None,
+            require_confidence=True,
+        )
+
+        self.assertIn("Уверенность OCR не получена.", warning)
 
     def test_report_files_include_summary_and_page_ocr_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -161,9 +302,69 @@ class ReaderConversionTests(unittest.TestCase):
         self.assertIn("документов обработано: 1", run_report)
         self.assertIn("страниц OCR: 1", run_report)
         self.assertIn("страниц с замечаниями OCR: 1", run_report)
+        self.assertIn("OCR языки: rus+eng", run_report)
+        self.assertIn("границы страниц в Markdown: обычный режим", run_report)
         self.assertIn("scan.pdf", ocr_report)
+        self.assertIn("Страницы для ручной проверки:", ocr_report)
         self.assertIn("стр. 2: OCR", ocr_report)
         self.assertIn("Мало текста.", ocr_report)
+
+
+    def test_ocr_report_includes_max_quality_attempt_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result_dir = root / "markdown_result_test"
+            result_dir.mkdir()
+            source = root / "scan.pdf"
+            source.write_text("placeholder", encoding="utf-8")
+            result = converter.ConversionResult(
+                source=source,
+                output_name="scan.md",
+                doc_type="PDF-scan",
+                method="Page OCR",
+                status="success",
+                char_count=650,
+                page_count=1,
+                cyrillic_ratio=0.0,
+                replacement_count=0,
+                quality_status="ok",
+                ocr_page_count=1,
+                page_report=[
+                    converter.PageOcrEntry(
+                        page_index=1,
+                        source="ocr",
+                        char_count=650,
+                        confidence=72.5,
+                        psm=6,
+                        dpi=300,
+                        variant="contrast_sharp",
+                        attempt_count=4,
+                        selected_reason="score=210.0; confidence=72.5; dpi=300; psm=6",
+                    )
+                ],
+            )
+            started = converter.dt.datetime(2026, 6, 10, 10, 0, 0)
+            finished = converter.dt.datetime(2026, 6, 10, 10, 0, 5)
+
+            converter.write_run_report_file(
+                result_dir,
+                root,
+                [result],
+                {"path": "tesseract.exe", "version": "5.4.0", "languages": ["eng", "osd", "rus"]},
+                started,
+                finished,
+            )
+            converter.write_ocr_report_file(result_dir, [result], started, finished)
+
+            run_report = (result_dir / "REPORT.txt").read_text(encoding="utf-8")
+            ocr_report = (result_dir / "OCR_REPORT.txt").read_text(encoding="utf-8")
+
+        self.assertIn("max", run_report)
+        self.assertIn("72.5", run_report)
+        self.assertIn("72.5", ocr_report)
+        self.assertIn("dpi: 300", ocr_report)
+        self.assertIn("psm: 6", ocr_report)
+        self.assertIn("contrast_sharp", ocr_report)
 
 
 if __name__ == "__main__":
