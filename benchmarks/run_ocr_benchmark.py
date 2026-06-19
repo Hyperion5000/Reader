@@ -126,6 +126,7 @@ BENCHMARK_CASES = (
             "docx table benchmark",
             "payment schedule",
             "quality clause",
+            "embedded image benchmark",
         ),
     ),
 )
@@ -435,6 +436,8 @@ def create_scan_image(
 
 
 def create_docx(path: Path, paragraphs: list[str]) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
     paragraph_xml = "".join(f"<w:p><w:r><w:t>{escape(text)}</w:t></w:r></w:p>" for text in paragraphs)
     table_xml = """
     <w:tbl>
@@ -448,11 +451,23 @@ def create_docx(path: Path, paragraphs: list[str]) -> None:
       </w:tr>
     </w:tbl>
     """
+    image_xml = """
+    <w:p>
+      <w:r>
+        <w:drawing>
+          <a:blip r:embed="rIdImage1"/>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    """
     document_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
     {paragraph_xml}
     {table_xml}
+    {image_xml}
     <w:sectPr/>
   </w:body>
 </w:document>"""
@@ -460,16 +475,31 @@ def create_docx(path: Path, paragraphs: list[str]) -> None:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 </Types>"""
     rels = """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>"""
+    document_rels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdImage1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.jpg"/>
+</Relationships>"""
+    image = Image.new("RGB", (1400, 500), "white")
+    draw = ImageDraw.Draw(image)
+    font_path = Path(r"C:\Windows\Fonts\arial.ttf")
+    font = ImageFont.truetype(str(font_path), 92) if font_path.exists() else ImageFont.load_default()
+    draw.text((90, 190), "Embedded image benchmark", fill="black", font=font)
+    image_buffer = BytesIO()
+    image.save(image_buffer, "JPEG", quality=95)
+
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", content_types)
         archive.writestr("_rels/.rels", rels)
         archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels)
+        archive.writestr("word/media/image1.jpg", image_buffer.getvalue())
 
 
 def write_pdf(path: Path, pages: list[dict]) -> None:

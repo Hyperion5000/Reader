@@ -5,6 +5,7 @@ import concurrent.futures
 import datetime as dt
 import importlib.util
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -38,6 +39,11 @@ STANDARD_OCR_VARIANTS = ("contrast_sharp",)
 MAX_OCR_VARIANTS = ("gray", "contrast_sharp", "binary")
 OCR_CONFIDENCE_REVIEW_THRESHOLD = 65.0
 OCR_EARLY_STOP_CONFIDENCE = 88.0
+OCR_PSM_SCORE_BONUS = {6: 8.0, 4: 2.0, 11: 0.0}
+DOCX_IMAGE_MIN_WIDTH = 320
+DOCX_IMAGE_MIN_HEIGHT = 160
+DOCX_IMAGE_MIN_PIXELS = 120_000
+DOCX_IMAGE_MIN_TEXT_LETTERS = 20
 
 
 @dataclass
@@ -80,6 +86,7 @@ class ConversionResult:
     text_page_count: int = 0
     ocr_page_count: int = 0
     blank_page_count: int = 0
+    docx_image_ocr_count: int = 0
     page_report: list[PageOcrEntry] = field(default_factory=list)
     warning: str = ""
     error: str = ""
@@ -533,6 +540,13 @@ def process_document(
         raw_markdown = normalize_newlines(raw_markdown).strip()
         if not raw_markdown:
             raise RuntimeError("Конвертер вернул пустой текст.")
+        review_entries = [page for page in page_report if page.warning]
+        if review_entries:
+            status = "требует проверки"
+            warning = join_warning(
+                warning,
+                f"Есть элементы OCR для ручной проверки: {len(review_entries)}.",
+            )
         quality = assess_text_quality(raw_markdown, doc_type)
         quality_status = quality["status"]
         cyrillic_ratio = quality["cyrillic_ratio"]
@@ -594,6 +608,7 @@ def process_document(
         text_page_count=sum(1 for page in page_report if page.source == "text"),
         ocr_page_count=sum(1 for page in page_report if page.source == "ocr"),
         blank_page_count=sum(1 for page in page_report if page.source == "blank"),
+        docx_image_ocr_count=sum(1 for page in page_report if page.source == "docx-image"),
         page_report=page_report,
         warning=warning,
         error=error,
@@ -692,7 +707,10 @@ def convert_file(
 
     if file_path.suffix.lower() == ".docx":
         converters = [
-            ("Встроенное чтение DOCX", lambda: convert_docx_direct(file_path)),
+            (
+                "Встроенное чтение DOCX + OCR изображений",
+                lambda: convert_docx_direct(file_path, tesseract_info, settings),
+            ),
             ("MarkItDown", lambda: convert_with_markitdown(file_path)),
             (
                 "Docling",
@@ -944,6 +962,7 @@ def run_ocr_attempts_for_page(
 ) -> tuple[str, OcrAttemptResult, int]:
     best: OcrAttemptResult | None = None
     attempt_count = 0
+    minimum_attempts_before_stop = len(settings.ocr_variants) * len(settings.ocr_psm_values)
 
     for dpi, base_image_path in rendered_images:
         for variant in settings.ocr_variants:
@@ -958,8 +977,12 @@ def run_ocr_attempts_for_page(
                     attempt = build_ocr_attempt_result(text, None, psm, dpi, variant)
                 if best is None or attempt.score > best.score:
                     best = attempt
-                if is_high_confidence_ocr_attempt(attempt):
-                    return attempt.text.strip(), attempt, attempt_count
+                if (
+                    attempt_count >= minimum_attempts_before_stop
+                    and best is not None
+                    and is_high_confidence_ocr_attempt(best)
+                ):
+                    return best.text.strip(), best, attempt_count
 
     if best is None:
         best = OcrAttemptResult("", None, 0, 0, "", 0.0, "OCR did not produce attempts.")
@@ -1199,7 +1222,7 @@ def build_ocr_attempt_result(
     variant: str,
 ) -> OcrAttemptResult:
     normalized = normalize_newlines(text).strip()
-    score = score_ocr_attempt(normalized, confidence)
+    score = round(score_ocr_attempt(normalized, confidence) + OCR_PSM_SCORE_BONUS.get(psm, 0.0), 3)
     return OcrAttemptResult(normalized, confidence, psm, dpi, variant, score)
 
 
@@ -1301,7 +1324,13 @@ def convert_with_pdfium_text(file_path: Path, settings: ConversionSettings | Non
     return "\n\n".join(pages)
 
 
-def convert_docx_direct(file_path: Path) -> str:
+def convert_docx_direct(
+    file_path: Path,
+    tesseract_info: dict | None = None,
+    settings: ConversionSettings | None = None,
+) -> str | tuple[str, list[PageOcrEntry]]:
+    settings = settings or ConversionSettings()
+    image_page_report: list[PageOcrEntry] = []
     with zipfile.ZipFile(file_path) as archive:
         try:
             xml_bytes = archive.read("word/document.xml")
@@ -1316,11 +1345,192 @@ def convert_docx_direct(file_path: Path) -> str:
         blocks = extract_docx_blocks(body)
         blocks.extend(extract_docx_notes(archive, "word/footnotes.xml", "Сноски"))
         blocks.extend(extract_docx_notes(archive, "word/endnotes.xml", "Концевые сноски"))
+        if tesseract_info and tesseract_info.get("path"):
+            image_blocks, image_page_report = extract_docx_image_ocr(
+                archive,
+                tesseract_info,
+                settings,
+            )
+            blocks.extend(image_blocks)
 
     result = "\n\n".join(blocks).strip()
     if not result:
         raise RuntimeError("Встроенное чтение DOCX не извлекло текст.")
+    if tesseract_info is not None:
+        return result, image_page_report
     return result
+
+
+def extract_docx_image_ocr(
+    archive: zipfile.ZipFile,
+    tesseract_info: dict,
+    settings: ConversionSettings,
+) -> tuple[list[str], list[PageOcrEntry]]:
+    image_targets = collect_docx_image_targets(archive)
+    if not image_targets:
+        return [], []
+
+    tesseract_path = tesseract_info.get("path")
+    if not tesseract_path:
+        return [], []
+    tessdata_dir = tesseract_info.get("tessdata_dir")
+
+    with tempfile.TemporaryDirectory(prefix="docx_image_ocr_") as temp_dir:
+        temp_path = Path(temp_dir)
+        jobs: list[tuple[int, Path]] = []
+        for image_index, archive_path in enumerate(image_targets, start=1):
+            suffix = Path(archive_path).suffix.lower() or ".img"
+            image_path = temp_path / f"image_{image_index:04d}{suffix}"
+            try:
+                image_path.write_bytes(archive.read(archive_path))
+            except (KeyError, OSError):
+                continue
+            if is_docx_ocr_candidate_image(image_path):
+                jobs.append((image_index, image_path))
+
+        if not jobs:
+            return [], []
+
+        workers = choose_ocr_worker_count(len(jobs), settings)
+        print(f"  OCR изображений DOCX: {len(jobs)}. Параллельно: {workers}")
+        results: dict[int, tuple[str, OcrAttemptResult, int]] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {
+                executor.submit(
+                    run_ocr_attempts_for_page,
+                    [(0, image_path)],
+                    tesseract_path,
+                    tessdata_dir,
+                    settings,
+                    temp_path,
+                    image_index,
+                ): image_index
+                for image_index, image_path in jobs
+            }
+            for future in concurrent.futures.as_completed(future_map):
+                image_index = future_map[future]
+                print(f"  OCR изображение DOCX {image_index}/{len(image_targets)}")
+                try:
+                    results[image_index] = future.result()
+                except Exception as exc:
+                    results[image_index] = (
+                        "",
+                        OcrAttemptResult("", None, 0, 0, "", 0.0, str(exc)),
+                        0,
+                    )
+
+        blocks: list[str] = []
+        page_report: list[PageOcrEntry] = []
+        output_index = 0
+        for image_index, _ in jobs:
+            text, best_attempt, attempt_count = results.get(
+                image_index,
+                (
+                    "",
+                    OcrAttemptResult("", None, 0, 0, "", 0.0, "OCR did not return a result."),
+                    0,
+                ),
+            )
+            normalized = normalize_newlines(text).strip()
+            if len(re.findall(r"[A-Za-zА-Яа-яЁё]", normalized)) < DOCX_IMAGE_MIN_TEXT_LETTERS:
+                continue
+            output_index += 1
+            warning = assess_page_text_warning(
+                normalized,
+                source="ocr",
+                confidence=best_attempt.confidence,
+                require_confidence=settings.quality_mode == "max",
+            )
+            if best_attempt.warning:
+                warning = join_warning(warning, best_attempt.warning)
+            blocks.append(f"### Изображение {output_index}\n\n{normalized}")
+            page_report.append(
+                PageOcrEntry(
+                    page_index=output_index,
+                    source="docx-image",
+                    char_count=len(normalized),
+                    warning=warning,
+                    confidence=best_attempt.confidence,
+                    psm=best_attempt.psm or None,
+                    dpi=None,
+                    variant=best_attempt.variant,
+                    attempt_count=attempt_count,
+                    selected_reason=build_selected_ocr_reason(best_attempt, attempt_count),
+                )
+            )
+
+    if not blocks:
+        return [], []
+    return ["## Текст из изображений DOCX", *blocks], page_report
+
+
+def collect_docx_image_targets(archive: zipfile.ZipFile) -> list[str]:
+    part_names = ["word/document.xml"]
+    part_names.extend(
+        sorted(
+            name
+            for name in archive.namelist()
+            if re.fullmatch(r"word/(?:header|footer)\d+\.xml", name)
+        )
+    )
+    part_names.extend(name for name in ("word/footnotes.xml", "word/endnotes.xml") if name in archive.namelist())
+
+    targets: list[str] = []
+    seen: set[str] = set()
+    relationship_attribute = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+    for part_name in part_names:
+        try:
+            root = ET.fromstring(archive.read(part_name))
+            rels_name = posixpath.join(
+                posixpath.dirname(part_name),
+                "_rels",
+                posixpath.basename(part_name) + ".rels",
+            )
+            rels_root = ET.fromstring(archive.read(rels_name))
+        except (KeyError, ET.ParseError):
+            continue
+
+        relationships: dict[str, str] = {}
+        for relationship in rels_root:
+            if relationship.attrib.get("TargetMode") == "External":
+                continue
+            if not relationship.attrib.get("Type", "").endswith("/image"):
+                continue
+            rel_id = relationship.attrib.get("Id")
+            target = relationship.attrib.get("Target")
+            if rel_id and target:
+                relationships[rel_id] = posixpath.normpath(
+                    posixpath.join(posixpath.dirname(part_name), target)
+                )
+
+        for node in root.iter():
+            rel_id = node.attrib.get(relationship_attribute + "embed")
+            if not rel_id:
+                rel_id = node.attrib.get(relationship_attribute + "id")
+            target = relationships.get(rel_id or "")
+            if target and target in archive.namelist() and target not in seen:
+                seen.add(target)
+                targets.append(target)
+
+    return targets
+
+
+def is_docx_ocr_candidate_image(image_path: Path) -> bool:
+    try:
+        from PIL import Image
+
+        configure_pillow_for_ocr(Image)
+        with Image.open(image_path) as image:
+            width, height = image.size
+        return (
+            width >= DOCX_IMAGE_MIN_WIDTH
+            and height >= DOCX_IMAGE_MIN_HEIGHT
+            and width * height >= DOCX_IMAGE_MIN_PIXELS
+            and not is_probably_blank_image(image_path)
+        )
+    except Exception:
+        return False
 
 
 def word_tag(name: str) -> str:
@@ -1646,9 +1856,21 @@ def write_run_report_file(
     total_pages = sum(item.page_count or 0 for item in results)
     total_chars = sum(item.char_count for item in results)
     total_ocr_pages = sum(item.ocr_page_count for item in results)
+    total_docx_image_ocr = sum(item.docx_image_ocr_count for item in results)
     total_text_pages = sum(item.text_page_count for item in results)
     total_blank_pages = sum(item.blank_page_count for item in results)
-    total_page_warnings = sum(1 for item in results for page in item.page_report if page.warning)
+    total_page_warnings = sum(
+        1
+        for item in results
+        for page in item.page_report
+        if page.warning and page.source != "docx-image"
+    )
+    total_docx_image_warnings = sum(
+        1
+        for item in results
+        for page in item.page_report
+        if page.warning and page.source == "docx-image"
+    )
     confidence_values = [page.confidence for item in results for page in item.page_report if page.confidence is not None]
     average_confidence = round(sum(confidence_values) / len(confidence_values), 1) if confidence_values else None
 
@@ -1673,9 +1895,11 @@ def write_run_report_file(
         f"- ошибки: {error_count}",
         f"- страниц PDF: {total_pages}",
         f"- страниц OCR: {total_ocr_pages}",
+        f"- изображений DOCX распознано OCR: {total_docx_image_ocr}",
         f"- страниц прочитано текстовым слоем: {total_text_pages}",
         f"- пустых/почти пустых страниц: {total_blank_pages}",
         f"- страниц с замечаниями OCR: {total_page_warnings}",
+        f"- изображений DOCX с замечаниями OCR: {total_docx_image_warnings}",
         f"- символов извлечено: {total_chars}",
         f"- Tesseract OCR: {tesseract_status}",
         f"- Tesseract path: {tesseract_info.get('path') or 'не найден'}",
@@ -1699,9 +1923,13 @@ def write_run_report_file(
                 f"   Markdown: 01_markdown/{item.output_name}",
                 f"   Страниц: {format_optional_int(item.page_count)}",
                 f"   OCR страниц: {item.ocr_page_count}",
+                f"   Изображений DOCX распознано OCR: {item.docx_image_ocr_count}",
                 f"   Текстовый слой: {item.text_page_count}",
                 f"   Пустые страницы: {item.blank_page_count}",
-                f"   Страниц с замечаниями OCR: {sum(1 for page in item.page_report if page.warning)}",
+                f"   Страниц с замечаниями OCR: "
+                f"{sum(1 for page in item.page_report if page.warning and page.source != 'docx-image')}",
+                f"   Изображений DOCX с замечаниями OCR: "
+                f"{sum(1 for page in item.page_report if page.warning and page.source == 'docx-image')}",
                 f"   Средняя уверенность OCR: {format_optional_float(average_page_confidence(item.page_report))}",
                 f"   Символов: {item.char_count}",
                 f"   Качество: {item.quality_status}",
@@ -1730,15 +1958,18 @@ def write_ocr_report_file(
 
     page_level_results = [item for item in results if item.page_report]
     if not page_level_results:
-        lines.append("Постраничный OCR не выполнялся: в обработанных файлах не было PDF-сканов или смешанных PDF.")
+        lines.append(
+            "OCR не выполнялся: в обработанных файлах не было PDF-сканов, "
+            "смешанных PDF или подходящих изображений DOCX."
+        )
         (result_dir / "OCR_REPORT.txt").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
         return
 
     pages_to_review = [(item, page) for item in page_level_results for page in item.page_report if page.warning]
-    lines.append("Страницы для ручной проверки:")
+    lines.append("Страницы и изображения для ручной проверки:")
     if pages_to_review:
         for item, page in pages_to_review:
-            lines.append(f"- {item.source.name}, стр. {page.page_index}: {page.warning}")
+            lines.append(f"- {item.source.name}, {format_ocr_entry_location(page)}: {page.warning}")
     else:
         lines.append("- нет")
     lines.append("")
@@ -1751,17 +1982,18 @@ def write_ocr_report_file(
                 f"Метод: {item.method}",
                 f"Страниц: {format_optional_int(item.page_count)}",
                 f"OCR страниц: {item.ocr_page_count}",
+                f"Изображений DOCX распознано OCR: {item.docx_image_ocr_count}",
                 f"Текстовый слой: {item.text_page_count}",
                 f"Пустые страницы: {item.blank_page_count}",
                 "",
-                "Страницы:",
+                "Страницы и изображения:",
             ]
         )
         for page in item.page_report:
             warning = page.warning or "нет"
             details = format_page_ocr_details(page)
             lines.append(
-                f"- стр. {page.page_index}: {format_page_source(page.source)}, "
+                f"- {format_ocr_entry_location(page)}: {format_page_source(page.source)}, "
                 f"символов: {page.char_count}, {details}, замечание: {warning}"
             )
         lines.append("")
@@ -1797,11 +2029,12 @@ def average_page_confidence(page_report: list[PageOcrEntry]) -> float | None:
 
 
 def format_page_ocr_details(page: PageOcrEntry) -> str:
-    if page.source != "ocr":
+    if page.source not in {"ocr", "docx-image"}:
         return "OCR детали: нет"
+    dpi = "исходное изображение" if page.source == "docx-image" else format_optional_int(page.dpi)
     return (
         f"уверенность: {format_optional_float(page.confidence)}, "
-        f"dpi: {format_optional_int(page.dpi)}, "
+        f"dpi: {dpi}, "
         f"psm: {format_optional_int(page.psm)}, "
         f"вариант: {page.variant or 'нет'}, "
         f"попыток: {page.attempt_count}, "
@@ -1816,7 +2049,15 @@ def format_page_source(source: str) -> str:
         return "текстовый слой"
     if source == "blank":
         return "пустая/почти пустая"
+    if source == "docx-image":
+        return "OCR изображения DOCX"
     return source
+
+
+def format_ocr_entry_location(page: PageOcrEntry) -> str:
+    if page.source == "docx-image":
+        return f"изображение {page.page_index}"
+    return f"стр. {page.page_index}"
 
 
 def normalize_newlines(text: str) -> str:
