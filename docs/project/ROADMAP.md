@@ -14,14 +14,14 @@ Reader is a young project. The near-term roadmap focuses on reliability before f
 - Added OCR for large text-bearing images embedded in DOCX files.
 - Made file-level review status consistent with page/image warnings in OCR reports.
 - Added a real-document release check covering scans, mixed PDFs, tables, and image-heavy DOCX files.
+- Published the clearly versioned `Reader v0.5.0` GitHub Release with the portable EXE and SHA256 file.
+- Added a release checklist and versioned release tags.
 
 ## Near term
 
-- Publish signed or clearly versioned GitHub Releases for `Reader_Portable.exe`.
 - Use the benchmark to test migration from bundled Tesseract 5.4.0 to 5.5.x for Windows portable builds.
 - Improve Markdown formatting for more complex nested tables and long legal documents.
 - Add anonymized sample documents for repeatable demos.
-- Add a simple release checklist and version labels.
 - Add more real-world anonymized OCR edge cases after the synthetic benchmark is stable.
 
 ## Medium term
