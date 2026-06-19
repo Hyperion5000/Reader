@@ -4,6 +4,10 @@ All notable changes to Reader are documented here.
 
 ## Unreleased
 
+- No changes yet.
+
+## 0.5.0 - 2026-06-19
+
 - Added local OCR for large text-bearing images embedded in DOCX files.
 - Added DOCX image OCR counts, confidence details, and warnings to `REPORT.txt` and `OCR_REPORT.txt`.
 - A damaged DOCX image no longer cancels text extraction from the rest of the document.
