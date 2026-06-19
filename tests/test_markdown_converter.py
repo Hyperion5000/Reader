@@ -3,7 +3,6 @@ from __future__ import annotations
 import tempfile
 import unittest
 import zipfile
-from io import BytesIO
 from pathlib import Path
 
 import sys
@@ -49,8 +48,6 @@ def make_docx(path: Path) -> None:
 
 
 def make_docx_with_image(path: Path) -> None:
-    from PIL import Image, ImageDraw
-
     document_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="{WORD_NS}"
   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -66,15 +63,10 @@ def make_docx_with_image(path: Path) -> None:
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
     Target="media/image1.png"/>
     </Relationships>"""
-    image_buffer = BytesIO()
-    image = Image.new("RGB", (640, 320), "white")
-    ImageDraw.Draw(image).rectangle((40, 40, 600, 280), outline="black", width=8)
-    image.save(image_buffer, format="PNG")
-
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("word/document.xml", document_xml)
         archive.writestr("word/_rels/document.xml.rels", relationships_xml)
-        archive.writestr("word/media/image1.png", image_buffer.getvalue())
+        archive.writestr("word/media/image1.png", b"synthetic-test-image")
 
 
 class ReaderConversionTests(unittest.TestCase):
@@ -93,6 +85,7 @@ class ReaderConversionTests(unittest.TestCase):
 
     def test_docx_direct_adds_ocr_text_from_embedded_images(self) -> None:
         original_ocr = converter.run_ocr_attempts_for_page
+        original_candidate_check = converter.is_docx_ocr_candidate_image
 
         def fake_ocr(*_args, **_kwargs):
             attempt = converter.OcrAttemptResult(
@@ -107,6 +100,7 @@ class ReaderConversionTests(unittest.TestCase):
 
         try:
             converter.run_ocr_attempts_for_page = fake_ocr
+            converter.is_docx_ocr_candidate_image = lambda _path: True
             with tempfile.TemporaryDirectory() as temp_dir:
                 docx_path = Path(temp_dir) / "images.docx"
                 make_docx_with_image(docx_path)
@@ -117,6 +111,7 @@ class ReaderConversionTests(unittest.TestCase):
                 )
         finally:
             converter.run_ocr_attempts_for_page = original_ocr
+            converter.is_docx_ocr_candidate_image = original_candidate_check
 
         text, page_report = converted
         self.assertIn("## Текст из изображений DOCX", text)
@@ -126,12 +121,14 @@ class ReaderConversionTests(unittest.TestCase):
 
     def test_docx_image_ocr_failure_keeps_regular_document_text(self) -> None:
         original_ocr = converter.run_ocr_attempts_for_page
+        original_candidate_check = converter.is_docx_ocr_candidate_image
 
         def failing_ocr(*_args, **_kwargs):
             raise RuntimeError("broken embedded image")
 
         try:
             converter.run_ocr_attempts_for_page = failing_ocr
+            converter.is_docx_ocr_candidate_image = lambda _path: True
             with tempfile.TemporaryDirectory() as temp_dir:
                 docx_path = Path(temp_dir) / "images.docx"
                 make_docx_with_image(docx_path)
@@ -142,6 +139,7 @@ class ReaderConversionTests(unittest.TestCase):
                 )
         finally:
             converter.run_ocr_attempts_for_page = original_ocr
+            converter.is_docx_ocr_candidate_image = original_candidate_check
 
         text, page_report = converted
         self.assertIn("Основной текст", text)
