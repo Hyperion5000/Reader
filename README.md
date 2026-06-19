@@ -2,12 +2,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](README.md)
-[![Privacy](https://img.shields.io/badge/privacy-local%20processing-brightgreen.svg)](SECURITY.md)
+[![Privacy](https://img.shields.io/badge/privacy-local%20processing-brightgreen.svg)](docs/project/SECURITY.md)
 [![OCR](https://img.shields.io/badge/OCR-rus%20%7C%20eng%20%7C%20osd-orange.svg)](README.md)
 
 Local Windows PDF/DOCX to Markdown converter with Russian OCR.
 
-Reader converts folders of PDF and DOCX documents into clean Markdown. It supports scanned PDFs, mixed text/OCR PDFs, Russian OCR, Word tables, Word footnotes, and portable Windows usage without requiring users to install Python.
+Reader converts folders of PDF and DOCX documents into clean Markdown. It supports scanned PDFs, mixed text/OCR PDFs, Russian OCR, Word tables, Word footnotes, OCR of large text-bearing images inside DOCX, and portable Windows usage without requiring users to install Python.
 
 ## Why It Matters
 
@@ -36,7 +36,7 @@ When Reader is started without a folder argument, it shows a small Windows progr
 
 - `00_ALL_DOCUMENTS.md` - one combined Markdown file with all processed documents.
 - `REPORT.txt` - short processing summary: files, status, OCR pages, warnings, and errors.
-- `OCR_REPORT.txt` - page-level PDF OCR report for scanned and mixed PDFs, including a short list of pages that need manual review.
+- `OCR_REPORT.txt` - OCR report for scanned PDF pages and recognized DOCX images, including a short list of elements that need manual review.
 - `01_markdown` - separate Markdown files for each document.
 - `02_problem_files` - created only when a file needs manual review.
 
@@ -47,7 +47,7 @@ Generated Markdown files do not contain technical HTML metadata headers such as 
 - PDFs with a normal text layer.
 - Fully scanned PDFs.
 - Mixed PDFs where some pages contain text and other pages are scans.
-- DOCX files with text, tables, footnotes, and endnotes.
+- DOCX files with text, tables, footnotes, endnotes, and large embedded images containing text.
 
 Old `.doc` files are not supported directly. Re-save them as `.docx` or PDF first.
 
@@ -64,9 +64,11 @@ PDFs are processed page by page:
 - high-resolution scanned pages are allowed within a controlled OCR image limit;
 - multiple OCR pages are processed in parallel.
 
+For DOCX files, Reader preserves normal text and tables first, then locally runs OCR on large embedded images such as screenshots and scanned page fragments. Small decorative images are skipped.
+
 Reader has two OCR quality modes:
 
-- `max` - default mode. It is slower, but tries multiple DPI values, image cleanup variants, and Tesseract page segmentation modes, then chooses the best result using confidence scoring.
+- `max` - default mode. It is slower, but compares a full first set of image cleanup and page-layout variants before it may stop, then chooses the best result using confidence and layout-aware scoring.
 - `standard` - faster mode close to the earlier single-pass OCR behavior.
 
 Advanced users can change OCR behavior from the command line:
@@ -83,7 +85,7 @@ Advanced testing options:
 - `--tesseract-path` points Reader to a specific `tesseract.exe`.
 - `--tessdata-dir` points Reader to a specific Tesseract language-data folder.
 
-`OCR_REPORT.txt` includes the selected OCR attempt details for each OCR page: confidence, DPI, PSM mode, image variant, and number of attempts.
+`OCR_REPORT.txt` includes the selected OCR attempt details for each OCR page or DOCX image: confidence, DPI where applicable, PSM mode, image variant, and number of attempts.
 
 ## Example Result
 
@@ -164,7 +166,7 @@ The portable exe is not stored in Git. Public binaries should be published throu
 - `benchmarks/` - synthetic OCR benchmark for comparing `standard` and `max` quality modes.
 - `scripts/` - launch, environment check, OCR setup, build, and release checksum scripts.
 - `tests/` - automated tests.
-- `docs/` - project documentation.
+- `docs/` - project documentation, including project text files in `docs/project/`.
 - `examples/` - safe synthetic output examples.
 - `.github/` - CI, issue templates, pull request template, and Dependabot.
 - `runtime/` - local technical folder, excluded from Git.
@@ -203,14 +205,14 @@ Do not attach real private documents to public GitHub issues. Use anonymized or 
 ## Maintenance
 
 - License: MIT.
-- Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
-- Security: [SECURITY.md](SECURITY.md).
-- Support: [SUPPORT.md](SUPPORT.md).
-- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-- Release process: [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
-- Roadmap: [ROADMAP.md](ROADMAP.md).
-- FAQ: [docs/FAQ.md](docs/FAQ.md).
+- Third-party notices: [docs/project/THIRD_PARTY_NOTICES.md](docs/project/THIRD_PARTY_NOTICES.md).
+- Contributing: [docs/project/CONTRIBUTING.md](docs/project/CONTRIBUTING.md).
+- Security: [docs/project/SECURITY.md](docs/project/SECURITY.md).
+- Support: [docs/project/SUPPORT.md](docs/project/SUPPORT.md).
+- Code of conduct: [docs/project/CODE_OF_CONDUCT.md](docs/project/CODE_OF_CONDUCT.md).
+- Release process: [docs/project/RELEASE_PROCESS.md](docs/project/RELEASE_PROCESS.md).
+- Roadmap: [docs/project/ROADMAP.md](docs/project/ROADMAP.md).
+- FAQ: [docs/project/FAQ.md](docs/project/FAQ.md).
 
 ## Tooling Status
 

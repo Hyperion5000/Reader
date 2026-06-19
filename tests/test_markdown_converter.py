@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import sys
@@ -47,6 +48,35 @@ def make_docx(path: Path) -> None:
         archive.writestr("word/footnotes.xml", footnotes_xml)
 
 
+def make_docx_with_image(path: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    document_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{WORD_NS}"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p><w:r><w:t>Основной текст</w:t></w:r></w:p>
+    <w:p><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p>
+  </w:body>
+</w:document>"""
+    relationships_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+    Target="media/image1.png"/>
+    </Relationships>"""
+    image_buffer = BytesIO()
+    image = Image.new("RGB", (640, 320), "white")
+    ImageDraw.Draw(image).rectangle((40, 40, 600, 280), outline="black", width=8)
+    image.save(image_buffer, format="PNG")
+
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/_rels/document.xml.rels", relationships_xml)
+        archive.writestr("word/media/image1.png", image_buffer.getvalue())
+
+
 class ReaderConversionTests(unittest.TestCase):
     def test_docx_direct_extracts_text_tables_and_footnotes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -60,6 +90,92 @@ class ReaderConversionTests(unittest.TestCase):
         self.assertIn("Ссылка[2]", text)
         self.assertIn("## Сноски", text)
         self.assertIn("[2] Текст сноски", text)
+
+    def test_docx_direct_adds_ocr_text_from_embedded_images(self) -> None:
+        original_ocr = converter.run_ocr_attempts_for_page
+
+        def fake_ocr(*_args, **_kwargs):
+            attempt = converter.OcrAttemptResult(
+                text="Распознанный текст из изображения документа",
+                confidence=96.0,
+                psm=6,
+                dpi=0,
+                variant="gray",
+                score=300.0,
+            )
+            return attempt.text, attempt, 3
+
+        try:
+            converter.run_ocr_attempts_for_page = fake_ocr
+            with tempfile.TemporaryDirectory() as temp_dir:
+                docx_path = Path(temp_dir) / "images.docx"
+                make_docx_with_image(docx_path)
+                converted = converter.convert_docx_direct(
+                    docx_path,
+                    {"path": "tesseract.exe", "tessdata_dir": None},
+                    converter.ConversionSettings(max_ocr_workers=1),
+                )
+        finally:
+            converter.run_ocr_attempts_for_page = original_ocr
+
+        text, page_report = converted
+        self.assertIn("## Текст из изображений DOCX", text)
+        self.assertIn("Распознанный текст из изображения документа", text)
+        self.assertEqual(len(page_report), 1)
+        self.assertEqual(page_report[0].source, "docx-image")
+
+    def test_docx_image_ocr_failure_keeps_regular_document_text(self) -> None:
+        original_ocr = converter.run_ocr_attempts_for_page
+
+        def failing_ocr(*_args, **_kwargs):
+            raise RuntimeError("broken embedded image")
+
+        try:
+            converter.run_ocr_attempts_for_page = failing_ocr
+            with tempfile.TemporaryDirectory() as temp_dir:
+                docx_path = Path(temp_dir) / "images.docx"
+                make_docx_with_image(docx_path)
+                converted = converter.convert_docx_direct(
+                    docx_path,
+                    {"path": "tesseract.exe", "tessdata_dir": None},
+                    converter.ConversionSettings(max_ocr_workers=1),
+                )
+        finally:
+            converter.run_ocr_attempts_for_page = original_ocr
+
+        text, page_report = converted
+        self.assertIn("Основной текст", text)
+        self.assertEqual(page_report, [])
+
+    def test_process_document_marks_ocr_warnings_for_review(self) -> None:
+        original_convert_file = converter.convert_file
+        try:
+            converter.convert_file = lambda *_args, **_kwargs: (
+                "Достаточно длинный основной текст документа. " * 30,
+                "test",
+                [converter.PageOcrEntry(1, "docx-image", 20, warning="Мало текста.")],
+            )
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                source = root / "sample.docx"
+                source.write_text("placeholder", encoding="utf-8")
+                clean_dir = root / "out"
+                problem_dir = root / "problems"
+                clean_dir.mkdir()
+                result = converter.process_document(
+                    source,
+                    "sample.md",
+                    clean_dir,
+                    problem_dir,
+                    {"path": None, "languages": []},
+                )
+                problem_exists = (problem_dir / "sample.md").exists()
+        finally:
+            converter.convert_file = original_convert_file
+
+        self.assertEqual(result.status, "требует проверки")
+        self.assertIn("элементы OCR", result.warning)
+        self.assertTrue(problem_exists)
 
     def test_find_documents_skips_runtime_build_dist_and_results(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -247,6 +363,13 @@ class ReaderConversionTests(unittest.TestCase):
         self.assertTrue(converter.is_high_confidence_ocr_attempt(good))
         self.assertFalse(converter.is_high_confidence_ocr_attempt(weak))
 
+    def test_score_prefers_stable_paragraph_layout_when_quality_is_equal(self) -> None:
+        text = "Структурированный текст документа " * 30
+        paragraph = converter.build_ocr_attempt_result(text, 90.0, 6, 300, "gray")
+        sparse = converter.build_ocr_attempt_result(text, 90.0, 11, 300, "gray")
+
+        self.assertGreater(paragraph.score, sparse.score)
+
     def test_max_quality_warns_when_ocr_confidence_is_missing(self) -> None:
         warning = converter.assess_page_text_warning(
             "Readable OCR text with enough words for a confidence check.",
@@ -305,7 +428,7 @@ class ReaderConversionTests(unittest.TestCase):
         self.assertIn("OCR языки: rus+eng", run_report)
         self.assertIn("границы страниц в Markdown: обычный режим", run_report)
         self.assertIn("scan.pdf", ocr_report)
-        self.assertIn("Страницы для ручной проверки:", ocr_report)
+        self.assertIn("Страницы и изображения для ручной проверки:", ocr_report)
         self.assertIn("стр. 2: OCR", ocr_report)
         self.assertIn("Мало текста.", ocr_report)
 

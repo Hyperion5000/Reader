@@ -4,6 +4,13 @@ All notable changes to Reader are documented here.
 
 ## Unreleased
 
+- Added local OCR for large text-bearing images embedded in DOCX files.
+- Added DOCX image OCR counts, confidence details, and warnings to `REPORT.txt` and `OCR_REPORT.txt`.
+- A damaged DOCX image no longer cancels text extraction from the rest of the document.
+- Fixed run status so any OCR element listed for manual review also marks its document as requiring review.
+- Max mode now compares at least one complete set of preprocessing and page-layout variants before early stopping.
+- Improved OCR result selection with a preference for stable paragraph order when candidate quality is otherwise close.
+- Added an embedded DOCX image case to the synthetic benchmark.
 - Added `--quality-mode max|standard`; `max` is now the default OCR mode for better scan quality.
 - Added multi-attempt OCR in max mode with multiple DPI values, image preprocessing variants, and Tesseract PSM modes.
 - Added Tesseract TSV confidence scoring and best-attempt selection for OCR pages.

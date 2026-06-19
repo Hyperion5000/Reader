@@ -40,7 +40,7 @@ For quality testing, Reader also supports `--preserve-page-breaks`, `--tesseract
 
 ## Why can OCR take longer now?
 
-Reader's default `max` quality mode prioritizes better recognition over speed. For scanned pages it can try multiple image cleanup variants, DPI values, and Tesseract page segmentation modes, then choose the best result by confidence score.
+Reader's default `max` quality mode prioritizes better recognition over speed. For scanned pages it compares multiple image cleanup variants, DPI values, and Tesseract page segmentation modes. It also recognizes large text-bearing images inside DOCX files. Image-heavy Word documents can therefore take noticeably longer.
 
 For faster processing, use:
 
@@ -56,7 +56,7 @@ Re-save them as `.docx` or PDF. The old `.doc` format is not supported directly.
 
 OCR quality depends on scan quality. Rotation, noise, stamps, handwriting, and poor contrast can reduce accuracy. Reader can mark suspicious files in `02_problem_files`.
 
-In `max` quality mode, `OCR_REPORT.txt` also marks OCR pages for manual review when confidence is low or when Tesseract cannot return a measurable confidence value.
+In `max` quality mode, `OCR_REPORT.txt` also marks OCR pages and DOCX images for manual review when confidence is low or when Tesseract cannot return a measurable confidence value. The whole document receives the same review status, so the summary and detailed report do not contradict each other.
 
 ## How do I compare OCR quality?
 

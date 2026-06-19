@@ -13,17 +13,18 @@ class RepositoryHygieneTests(unittest.TestCase):
         required_paths = [
             "README.md",
             "LICENSE",
-            "CHANGELOG.md",
-            "CONTRIBUTING.md",
-            "SECURITY.md",
-            "SUPPORT.md",
-            "CODE_OF_CONDUCT.md",
-            "THIRD_PARTY_NOTICES.md",
-            "ROADMAP.md",
-            "benchmarks/README.md",
+            "docs/project/CHANGELOG.md",
+            "docs/project/CONTRIBUTING.md",
+            "docs/project/SECURITY.md",
+            "docs/project/SUPPORT.md",
+            "docs/project/CODE_OF_CONDUCT.md",
+            "docs/project/THIRD_PARTY_NOTICES.md",
+            "docs/project/ROADMAP.md",
+            "docs/project/BENCHMARK.md",
+            "docs/project/EXAMPLES.md",
             "benchmarks/run_ocr_benchmark.py",
-            "docs/FAQ.md",
-            "docs/RELEASE_PROCESS.md",
+            "docs/project/FAQ.md",
+            "docs/project/RELEASE_PROCESS.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
             ".github/dependabot.yml",
             ".github/workflows/ci.yml",
@@ -35,6 +36,22 @@ class RepositoryHygieneTests(unittest.TestCase):
         missing = [path for path in required_paths if not (REPO_ROOT / path).exists()]
 
         self.assertEqual(missing, [])
+
+    def test_tracked_root_files_stay_minimal(self) -> None:
+        tracked = subprocess.check_output(
+            ["git", "ls-files"],
+            cwd=REPO_ROOT,
+            text=True,
+            encoding="utf-8",
+        ).splitlines()
+        allowed_root_files = {"README.md", "LICENSE", ".gitignore"}
+        root_files = {
+            path
+            for path in tracked
+            if "/" not in path and "\\" not in path
+        }
+
+        self.assertEqual(root_files - allowed_root_files, set())
 
     def test_forbidden_files_are_not_tracked(self) -> None:
         tracked = subprocess.check_output(
@@ -66,7 +83,7 @@ class RepositoryHygieneTests(unittest.TestCase):
 
         self.assertIn("https://github.com/Hyperion5000/Reader/releases", readme)
         self.assertIn("Reader does not upload documents to the internet", readme)
-        self.assertIn("docs/RELEASE_PROCESS.md", readme)
+        self.assertIn("docs/project/RELEASE_PROCESS.md", readme)
 
 
 if __name__ == "__main__":
